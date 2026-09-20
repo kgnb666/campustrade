@@ -6,6 +6,7 @@ import '../../models/category_model.dart';
 import '../../routes/app_routes.dart';
 import '../../services/goods_service.dart';
 import '../../widgets/ai_goods_assistant_sheet.dart';
+import '../../widgets/goods_thumbnail.dart';
 import '../../models/status_enums.dart';
 import '../../utils/api_error.dart';
 
@@ -596,17 +597,11 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  url,
+                child: GoodsThumbnail(
+                  imageUrl: url,
                   width: 80,
                   height: 80,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
-                    width: 80,
-                    height: 80,
-                    color: Colors.grey.shade200,
-                    child: const Icon(Icons.broken_image),
-                  ),
+                  borderRadius: 0,
                 ),
               ),
               Positioned(

@@ -119,11 +119,23 @@ public class GoodsController {
     }
 
     /**
-     * 获取当前登录用户发布的全部商品
+     * 获取当前登录用户发布的商品
+     *
+     * <p>返回结构固定为 {@code Result<List<GoodsListVO>>}（与历史一致，客户端无需改动）：</p>
+     * <ul>
+     *   <li>不传 page/size：保持历史全量语义；</li>
+     *   <li>传 page/size：只返回该页（仍然是同一个数组结构），避免商品多的卖家产生无界响应。</li>
+     * </ul>
      */
     @GetMapping("/my")
-    public Result<List<GoodsListVO>> listMyGoods() {
-        List<GoodsListVO> list = goodsService.listMyGoods();
+    public Result<List<GoodsListVO>> listMyGoods(
+            @RequestParam(value = "page", required = false) Integer page,
+            @RequestParam(value = "size", required = false) Integer size) {
+        if (page == null && size == null) {
+            List<GoodsListVO> list = goodsService.listMyGoods();
+            return Result.success("获取我的商品成功", list);
+        }
+        List<GoodsListVO> list = goodsService.pageMyGoods(page, size).getRecords();
         return Result.success("获取我的商品成功", list);
     }
 

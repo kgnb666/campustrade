@@ -10,6 +10,7 @@ import '../../services/goods_service.dart';
 import '../../models/status_enums.dart';
 import '../../utils/api_error.dart';
 import '../../utils/name_utils.dart';
+import '../../widgets/goods_thumbnail.dart';
 
 /// 商品详情页 (图片轮播、价格、描述、卖家认证与信用分展示)
 class GoodsDetailPage extends StatefulWidget {
@@ -394,13 +395,11 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
               setState(() => _currentImageIndex = index);
             },
             itemBuilder: (context, index) {
-              return Image.network(
-                goods.images[index],
-                fit: BoxFit.cover,
-                errorBuilder: (_, _, _) => Container(
-                  color: Colors.grey.shade100,
-                  child: const Center(child: Icon(Icons.broken_image, size: 48)),
-                ),
+              // 大图按可视区域宽度解码（避免把相机原图整张塞进图片缓存），并带加载占位
+              return GoodsThumbnail(
+                imageUrl: goods.images[index],
+                height: 280,
+                borderRadius: 0,
               );
             },
           ),
@@ -963,19 +962,12 @@ class _CreateOrderSheetState extends State<_CreateOrderSheet> {
                     child: SizedBox(
                       width: 60,
                       height: 60,
-                      child: goods.images.isNotEmpty
-                          ? Image.network(
-                              goods.images.first,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => Container(
-                                color: Colors.grey.shade200,
-                                child: const Icon(Icons.image_outlined, color: Colors.grey),
-                              ),
-                            )
-                          : Container(
-                              color: Colors.grey.shade200,
-                              child: const Icon(Icons.image_outlined, color: Colors.grey),
-                            ),
+                      child: GoodsThumbnail(
+                        imageUrl: goods.images.isNotEmpty ? goods.images.first : null,
+                        width: 60,
+                        height: 60,
+                        borderRadius: 0,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),

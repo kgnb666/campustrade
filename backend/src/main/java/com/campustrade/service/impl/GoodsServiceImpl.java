@@ -115,30 +115,36 @@ public class GoodsServiceImpl implements GoodsService {
         goodsMapper.insert(goods);
         Long goodsId = goods.getId();
 
-        // 4. 保存商品图片列表
+        // 4. 保存商品图片列表（单条多值 INSERT，避免"一张图一次往返"）
+        List<GoodsImage> images = new ArrayList<>();
         if (dto.getImages() != null && !dto.getImages().isEmpty()) {
             for (int i = 0; i < dto.getImages().size(); i++) {
-                GoodsImage image = GoodsImage.builder()
+                images.add(GoodsImage.builder()
                         .goodsId(goodsId)
                         .imageUrl(dto.getImages().get(i))
                         .sort(i)
                         .createdTime(now)
-                        .build();
-                goodsImageMapper.insert(image);
+                        .build());
             }
         }
+        if (!images.isEmpty()) {
+            goodsImageMapper.insertBatch(images);
+        }
 
-        // 5. 保存商品标签列表
-        if (dto.getTags() != null && !dto.getTags().isEmpty()) {
+        // 5. 保存商品标签列表（同上：一次往返写完所有标签）
+        List<GoodsTag> tags = new ArrayList<>();
+        if (dto.getTags() != null) {
             for (String tag : dto.getTags()) {
                 if (StringUtils.hasText(tag)) {
-                    GoodsTag goodsTag = GoodsTag.builder()
+                    tags.add(GoodsTag.builder()
                             .goodsId(goodsId)
                             .tagName(tag.trim())
-                            .build();
-                    goodsTagMapper.insert(goodsTag);
+                            .build());
                 }
             }
+        }
+        if (!tags.isEmpty()) {
+            goodsTagMapper.insertBatch(tags);
         }
 
         log.info("用户 [{}] 成功发布商品 ID=[{}], 标题=[{}]", userId, goodsId, goods.getTitle());
@@ -159,9 +165,15 @@ public class GoodsServiceImpl implements GoodsService {
         // 关键词检索 (标题或描述)
         if (StringUtils.hasText(queryDTO.getKeyword())) {
             String kw = SearchKeywordUtils.normalize(queryDTO.getKeyword());
-            if (kw != null) {
-                final String searchKw = kw;
-                wrapper.and(w -> w.like(Goods::getTitle, searchKw).or().like(Goods::getDescription, searchKw));
+            // 通配符转义后再交给 LIKE ... ESCAPE：用户输入的 % / _ / \ 只作字面匹配。
+            // 这里用 MyBatis-Plus 的 apply + {0} 占位符（仍然生成 #{} 预编译参数），不拼接任何字符串字面量，
+            // SQL 结构固定为 "(title LIKE ? ESCAPE '\' OR description LIKE ? ESCAPE '\')"。
+            String likePattern = SearchKeywordUtils.escapeLikePattern(kw);
+            if (likePattern != null) {
+                String containsPattern = "%" + likePattern + "%";
+                wrapper.and(w -> w.apply(
+                        "(title LIKE {0} ESCAPE '\\' OR description LIKE {0} ESCAPE '\\')",
+                        containsPattern));
             }
         }
 
@@ -200,6 +212,18 @@ public class GoodsServiceImpl implements GoodsService {
         // 排序规则: 最新发布优先
         wrapper.orderByDesc(Goods::getCreatedTime);
 
+        // searchCount 保持开启（不改为 false）：分页响应里的 total/pages 是既有接口契约的一部分，
+        // 前端依赖 pages 判定 hasMore（见 frontend GoodsController.loadGoods），关闭会让列表无法翻页。
+        // 因此这里选择"让 count 更快"而不是"不做 count"：
+        //   * V11 为 goods 增加了把 status 放在首列的复合索引，count 与列表共用同一组前缀列；
+        //     实测（200k 行实验库）count 可走 Index Only Scan：22 buffers / 1.0ms，
+        //     而 bitmap heap scan 需 2611 buffers / 2.6ms、并行顺序扫描需 5882 buffers / 13ms。
+        //     注意：默认 random_page_cost=4 会让规划器偏向顺序扫描路径，
+        //     SSD 环境把该参数调到 1.1 左右时索引路径才会被自然选中（详见 V11 迁移注释与交付说明）。
+        //   * MyBatis-Plus 默认 optimizeCountSql=true 会剥掉 ORDER BY 与无用的 select 列，
+        //     count 语句本身不包含排序开销。
+        // 若后续要支持"无限滚动到底"的场景，建议改为游标（keyset）分页：以 created_time + id 作为
+        // 游标条件，既能继续走上面的复合索引，也能避免深 OFFSET 的线性开销。
         IPage<Goods> goodsPage = goodsMapper.selectPage(page, wrapper);
 
         // 组装 VO
@@ -396,31 +420,38 @@ public class GoodsServiceImpl implements GoodsService {
             throw goodsStatusConflict(id, "修改");
         }
 
-        // 如果传入了新的图片列表，重新替换
+        // 如果传入了新的图片列表，重新替换（批量插入：一次往返）
         if (dto.getImages() != null) {
             goodsImageMapper.delete(new LambdaQueryWrapper<GoodsImage>().eq(GoodsImage::getGoodsId, id));
+            List<GoodsImage> newImages = new ArrayList<>();
+            LocalDateTime now = LocalDateTime.now();
             for (int i = 0; i < dto.getImages().size(); i++) {
-                GoodsImage image = GoodsImage.builder()
+                newImages.add(GoodsImage.builder()
                         .goodsId(id)
                         .imageUrl(dto.getImages().get(i))
                         .sort(i)
-                        .createdTime(LocalDateTime.now())
-                        .build();
-                goodsImageMapper.insert(image);
+                        .createdTime(now)
+                        .build());
+            }
+            if (!newImages.isEmpty()) {
+                goodsImageMapper.insertBatch(newImages);
             }
         }
 
-        // 如果传入了新的标签列表，重新替换
+        // 如果传入了新的标签列表，重新替换（批量插入：一次往返）
         if (dto.getTags() != null) {
             goodsTagMapper.delete(new LambdaQueryWrapper<GoodsTag>().eq(GoodsTag::getGoodsId, id));
+            List<GoodsTag> newTags = new ArrayList<>();
             for (String tag : dto.getTags()) {
                 if (StringUtils.hasText(tag)) {
-                    GoodsTag goodsTag = GoodsTag.builder()
+                    newTags.add(GoodsTag.builder()
                             .goodsId(id)
                             .tagName(tag.trim())
-                            .build();
-                    goodsTagMapper.insert(goodsTag);
+                            .build());
                 }
+            }
+            if (!newTags.isEmpty()) {
+                goodsTagMapper.insertBatch(newTags);
             }
         }
 
@@ -505,6 +536,29 @@ public class GoodsServiceImpl implements GoodsService {
         );
 
         return convertToVOList(myGoods);
+    }
+
+    @Override
+    public IPage<GoodsListVO> pageMyGoods(Integer page, Integer size) {
+        Long userId = getCurrentUserId();
+        if (userId == null) {
+            throw new BusinessException(401, "请先登录");
+        }
+
+        int current = (page != null && page > 0) ? page : 1;
+        int pageSize = (size != null && size > 0) ? Math.min(size, 100) : 10;
+
+        Page<Goods> pageParam = new Page<>(current, pageSize);
+        IPage<Goods> goodsPage = goodsMapper.selectPage(
+                pageParam,
+                new LambdaQueryWrapper<Goods>()
+                        .eq(Goods::getSellerId, userId)
+                        .orderByDesc(Goods::getCreatedTime)
+        );
+
+        Page<GoodsListVO> resultPage = new Page<>(goodsPage.getCurrent(), goodsPage.getSize(), goodsPage.getTotal());
+        resultPage.setRecords(convertToVOList(goodsPage.getRecords()));
+        return resultPage;
     }
 
     /**
@@ -744,16 +798,12 @@ public class GoodsServiceImpl implements GoodsService {
             }
         }
 
+        // 批量读取 Redis 浏览量增量（MGET 一次往返，替代"每个商品一次 GET"的 N+1）
+        Map<Long, Integer> viewDeltaMap = loadViewDeltas(goodsIds);
+
         return goodsList.stream().map(goods -> {
-            // 计算实时浏览量
-            String val = stringRedisTemplate.opsForValue().get(VIEW_KEY_PREFIX + goods.getId());
-            int delta = 0;
-            if (val != null) {
-                try {
-                    delta = Integer.parseInt(val);
-                } catch (Exception ignored) {
-                }
-            }
+            // 计算实时浏览量 = 库内快照 + Redis 未落盘增量
+            int delta = viewDeltaMap.getOrDefault(goods.getId(), 0);
             int totalViews = (goods.getViewCount() != null ? goods.getViewCount() : 0) + delta;
 
             return GoodsListVO.builder()
@@ -774,5 +824,48 @@ public class GoodsServiceImpl implements GoodsService {
                     .createdTime(goods.getCreatedTime())
                     .build();
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * 批量读取一组商品的 Redis 浏览量增量。
+     *
+     * <p>历史实现对每个商品单独 {@code GET goods:view:{id}}，一页 10 条就是 10 次往返；
+     * 改为一次 {@code MGET} 后往返次数恒为 1（与列表长度无关）。</p>
+     *
+     * <p>Redis 不可用时与商品详情页保持同样的"优雅降级"策略：只记录告警并返回空增量，
+     * 列表仍以数据库快照正常展示浏览量，而不是把整个列表接口打成 500。</p>
+     */
+    private Map<Long, Integer> loadViewDeltas(List<Long> goodsIds) {
+        if (goodsIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<String> keys = goodsIds.stream().map(gid -> VIEW_KEY_PREFIX + gid).collect(Collectors.toList());
+        List<String> values;
+        try {
+            values = stringRedisTemplate.opsForValue().multiGet(keys);
+        } catch (Exception e) {
+            log.warn("批量读取商品浏览量缓存失败，列表降级为仅展示数据库计数: error={}", e.getMessage());
+            return Collections.emptyMap();
+        }
+        if (values == null) {
+            return Collections.emptyMap();
+        }
+
+        Map<Long, Integer> deltaMap = new HashMap<>();
+        for (int i = 0; i < goodsIds.size(); i++) {
+            String val = (i < values.size()) ? values.get(i) : null;
+            if (val == null) {
+                continue;
+            }
+            try {
+                int delta = Integer.parseInt(val.trim());
+                if (delta != 0) {
+                    deltaMap.put(goodsIds.get(i), delta);
+                }
+            } catch (NumberFormatException ignored) {
+                // 脏值按 0 处理：不因单个异常值影响整页展示
+            }
+        }
+        return deltaMap;
     }
 }

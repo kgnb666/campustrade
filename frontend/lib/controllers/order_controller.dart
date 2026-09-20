@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
+import '../config/app_config.dart';
 import '../api/order_api.dart';
 import '../models/order.dart';
 import '../utils/api_error.dart';
@@ -109,7 +110,7 @@ class OrderController extends GetxController {
         role: currentRole.value,
         status: currentStatusFilter.value?.code,
         page: page,
-        size: 10,
+        size: AppConfig.orderPageSize,
       );
 
       if (_isStale(requestId)) return;

@@ -22,8 +22,13 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 平台管理员治理与工单处理业务实现类
@@ -61,7 +66,20 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
         wrapper.orderByDesc(Report::getCreatedTime);
 
         IPage<Report> reportPage = reportMapper.selectPage(page, wrapper);
-        return reportPage.convert(this::convertToAdminDetailVO);
+
+        // 批量聚合关联数据后一次性转换：
+        // 旧实现是 reportPage.convert(this::convertToAdminDetailVO)，每行都要单独查举报人、
+        // 处理人与目标快照，pageSize=100 时单请求最多产生 3×100 条关联查询（N+1）。
+        // 现在改为"先按需收集 ID -> 每种关联批量查一次 -> 内存组装"，SQL 条数与页大小解耦。
+        ReportViewContext context = buildViewContext(reportPage.getRecords());
+        List<AdminReportDetailVO> voList = reportPage.getRecords().stream()
+                .map(report -> convertToAdminDetailVO(report, context))
+                .collect(Collectors.toList());
+
+        Page<AdminReportDetailVO> resultPage =
+                new Page<>(reportPage.getCurrent(), reportPage.getSize(), reportPage.getTotal());
+        resultPage.setRecords(voList);
+        return resultPage;
     }
 
     @Override
@@ -73,7 +91,7 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
         if (report == null) {
             throw new BusinessException(404, "举报工单不存在");
         }
-        return convertToAdminDetailVO(report);
+        return convertToAdminDetailVO(report, buildViewContext(Collections.singletonList(report)));
     }
 
     @Override
@@ -339,9 +357,12 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
     }
 
     /**
-     * 转换为管理员详情视图对象并组装目标业务快照
+     * 转换为管理员详情视图对象并组装目标业务快照（使用批量聚合上下文，不再产生每行查询）。
+     *
+     * @param report  工单实体
+     * @param context 由 {@link #buildViewContext(List)} 一次性构建的关联数据快照
      */
-    private AdminReportDetailVO convertToAdminDetailVO(Report report) {
+    private AdminReportDetailVO convertToAdminDetailVO(Report report, ReportViewContext context) {
         if (report == null) {
             return null;
         }
@@ -358,27 +379,20 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
         } catch (Exception ignored) {
         }
 
-        // 关联查询举报人与处理人基础信息
+        // 关联信息全部来自批量上下文（内存查表，零 SQL）
+        User reporter = context.user(report.getReporterId());
         String reporterUsername = null;
         String reporterNickname = null;
-        if (report.getReporterId() != null) {
-            User reporter = userMapper.selectById(report.getReporterId());
-            if (reporter != null) {
-                reporterUsername = reporter.getUsername();
-                reporterNickname = reporter.getNickname();
-            }
+        if (reporter != null) {
+            reporterUsername = reporter.getUsername();
+            reporterNickname = reporter.getNickname();
         }
 
-        String handlerUsername = null;
-        if (report.getHandledBy() != null) {
-            User handler = userMapper.selectById(report.getHandledBy());
-            if (handler != null) {
-                handlerUsername = handler.getUsername();
-            }
-        }
+        User handler = context.user(report.getHandledBy());
+        String handlerUsername = (handler != null) ? handler.getUsername() : null;
 
         // 组装目标实体业务上下文快照
-        Map<String, Object> targetSnapshot = buildTargetSnapshot(report.getTargetType(), report.getTargetId());
+        Map<String, Object> targetSnapshot = context.targetSnapshot(report.getTargetType(), report.getTargetId());
 
         return AdminReportDetailVO.builder()
                 .id(report.getId())
@@ -402,42 +416,142 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                 .build();
     }
 
-    private Map<String, Object> buildTargetSnapshot(String targetType, Long targetId) {
-        Map<String, Object> snapshot = new HashMap<>();
-        if (targetId == null) {
-            return snapshot;
+    /**
+     * 批量构建转换所需的关联数据上下文（把 N+1 收敛为常数条查询）。
+     *
+     * <p>查询次数上界固定为 3：</p>
+     * <ol>
+     *   <li>{@code user}：举报人 ∪ 处理人 ∪ 被举报用户合并成一次 {@code selectBatchIds}；</li>
+     *   <li>{@code goods}：targetType=GOODS 的 targetId 一次批量查；</li>
+     *   <li>{@code review}：targetType=REVIEW 的 targetId 一次批量查。</li>
+     * </ol>
+     * <p>空集合的桶直接跳过（不产生 SQL），因此只有一种 targetType 的页面通常只多 2 条查询。</p>
+     */
+    private ReportViewContext buildViewContext(List<Report> reports) {
+        if (reports == null || reports.isEmpty()) {
+            return ReportViewContext.empty();
         }
 
-        if (ReportTargetType.GOODS.getCode().equals(targetType)) {
-            Goods goods = goodsMapper.selectById(targetId);
-            if (goods != null) {
-                snapshot.put("goodsId", goods.getId());
-                snapshot.put("title", goods.getTitle());
-                snapshot.put("price", goods.getPrice());
-                snapshot.put("status", goods.getStatus());
-                snapshot.put("sellerId", goods.getSellerId());
+        Set<Long> userIds = new HashSet<>();
+        Set<Long> goodsIds = new HashSet<>();
+        Set<Long> reviewIds = new HashSet<>();
+        for (Report report : reports) {
+            if (report.getReporterId() != null) {
+                userIds.add(report.getReporterId());
             }
-        } else if (ReportTargetType.REVIEW.getCode().equals(targetType)) {
-            Review review = reviewMapper.selectById(targetId);
-            if (review != null) {
-                snapshot.put("reviewId", review.getId());
-                snapshot.put("score", review.getScore());
-                snapshot.put("content", review.getContent());
-                snapshot.put("status", review.getStatus() != null ? review.getStatus().name() : null);
-                snapshot.put("reviewerId", review.getReviewerId());
-                snapshot.put("reviewedUserId", review.getReviewedUserId());
+            if (report.getHandledBy() != null) {
+                userIds.add(report.getHandledBy());
             }
-        } else if (ReportTargetType.USER.getCode().equals(targetType)) {
-            User user = userMapper.selectById(targetId);
-            if (user != null) {
-                snapshot.put("userId", user.getId());
-                snapshot.put("username", user.getUsername());
-                snapshot.put("nickname", user.getNickname());
-                snapshot.put("status", user.getStatus());
-                snapshot.put("role", user.getRole());
+            Long targetId = report.getTargetId();
+            if (targetId == null) {
+                continue;
+            }
+            if (ReportTargetType.USER.getCode().equals(report.getTargetType())) {
+                // 被举报用户与举报人/处理人同表，合并进同一次批量查询
+                userIds.add(targetId);
+            } else if (ReportTargetType.GOODS.getCode().equals(report.getTargetType())) {
+                goodsIds.add(targetId);
+            } else if (ReportTargetType.REVIEW.getCode().equals(report.getTargetType())) {
+                reviewIds.add(targetId);
             }
         }
-        return snapshot;
+
+        Map<Long, User> userMap = new HashMap<>();
+        if (!userIds.isEmpty()) {
+            List<User> users = userMapper.selectBatchIds(userIds);
+            if (users != null) {
+                for (User user : users) {
+                    userMap.put(user.getId(), user);
+                }
+            }
+        }
+
+        Map<Long, Goods> goodsMap = new HashMap<>();
+        if (!goodsIds.isEmpty()) {
+            List<Goods> goodsList = goodsMapper.selectBatchIds(goodsIds);
+            if (goodsList != null) {
+                for (Goods goods : goodsList) {
+                    goodsMap.put(goods.getId(), goods);
+                }
+            }
+        }
+
+        Map<Long, Review> reviewMap = new HashMap<>();
+        if (!reviewIds.isEmpty()) {
+            List<Review> reviews = reviewMapper.selectBatchIds(reviewIds);
+            if (reviews != null) {
+                for (Review review : reviews) {
+                    reviewMap.put(review.getId(), review);
+                }
+            }
+        }
+
+        return new ReportViewContext(userMap, goodsMap, reviewMap);
+    }
+
+    /**
+     * 工单列表/详情的关联数据上下文：只做内存查表，绝不触发 SQL。
+     *
+     * <p>字段与 {@code buildTargetSnapshot} 老实现一一对应，因此返回给前端的
+     * {@code targetSnapshot} 结构与取值规则完全不变。</p>
+     */
+    private static final class ReportViewContext {
+
+        private final Map<Long, User> userMap;
+        private final Map<Long, Goods> goodsMap;
+        private final Map<Long, Review> reviewMap;
+
+        private ReportViewContext(Map<Long, User> userMap, Map<Long, Goods> goodsMap, Map<Long, Review> reviewMap) {
+            this.userMap = userMap;
+            this.goodsMap = goodsMap;
+            this.reviewMap = reviewMap;
+        }
+
+        static ReportViewContext empty() {
+            return new ReportViewContext(Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap());
+        }
+
+        User user(Long id) {
+            return (id == null) ? null : userMap.get(id);
+        }
+
+        Map<String, Object> targetSnapshot(String targetType, Long targetId) {
+            Map<String, Object> snapshot = new HashMap<>();
+            if (targetId == null) {
+                return snapshot;
+            }
+
+            if (ReportTargetType.GOODS.getCode().equals(targetType)) {
+                Goods goods = goodsMap.get(targetId);
+                if (goods != null) {
+                    snapshot.put("goodsId", goods.getId());
+                    snapshot.put("title", goods.getTitle());
+                    snapshot.put("price", goods.getPrice());
+                    snapshot.put("status", goods.getStatus());
+                    snapshot.put("sellerId", goods.getSellerId());
+                }
+            } else if (ReportTargetType.REVIEW.getCode().equals(targetType)) {
+                Review review = reviewMap.get(targetId);
+                if (review != null) {
+                    snapshot.put("reviewId", review.getId());
+                    snapshot.put("score", review.getScore());
+                    snapshot.put("content", review.getContent());
+                    snapshot.put("status", review.getStatus() != null ? review.getStatus().name() : null);
+                    snapshot.put("reviewerId", review.getReviewerId());
+                    snapshot.put("reviewedUserId", review.getReviewedUserId());
+                }
+            } else if (ReportTargetType.USER.getCode().equals(targetType)) {
+                User user = userMap.get(targetId);
+                if (user != null) {
+                    snapshot.put("userId", user.getId());
+                    snapshot.put("username", user.getUsername());
+                    snapshot.put("nickname", user.getNickname());
+                    snapshot.put("status", user.getStatus());
+                    snapshot.put("role", user.getRole());
+                }
+            }
+            return snapshot;
+        }
     }
 
     private AdminAuditLogVO convertToAuditLogVO(AdminAuditLog logEntity) {

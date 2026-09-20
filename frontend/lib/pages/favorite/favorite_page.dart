@@ -4,6 +4,7 @@ import '../../controllers/favorite_controller.dart';
 import '../../models/favorite_model.dart';
 import '../../routes/app_routes.dart';
 import '../../models/status_enums.dart';
+import '../../widgets/goods_thumbnail.dart';
 
 /// 我的收藏页面
 class FavoritePage extends StatefulWidget {
@@ -162,19 +163,12 @@ class _FavoritePageState extends State<FavoritePage> {
                 child: SizedBox(
                   width: 90,
                   height: 90,
-                  child: item.firstImageUrl != null && item.firstImageUrl!.isNotEmpty
-                      ? Image.network(
-                          item.firstImageUrl!,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stackTrace) => Container(
-                            color: Colors.grey.shade200,
-                            child: const Icon(Icons.broken_image, color: Colors.grey),
-                          ),
-                        )
-                      : Container(
-                          color: Colors.grey.shade200,
-                          child: const Icon(Icons.image, color: Colors.grey),
-                        ),
+                  child: GoodsThumbnail(
+                    imageUrl: item.firstImageUrl,
+                    width: 90,
+                    height: 90,
+                    borderRadius: 0,
+                  ),
                 ),
               ),
               const SizedBox(width: 12),

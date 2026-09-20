@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import '../config/app_config.dart';
 import '../models/history_model.dart';
 import '../services/history_service.dart';
 import '../utils/api_error.dart';
@@ -62,7 +63,7 @@ class HistoryController extends GetxController {
     try {
       final res = await _historyService.getHistoryList(
         page: page,
-        size: 20,
+        size: AppConfig.historyPageSize,
       );
 
       if (_isStale(requestId)) return;

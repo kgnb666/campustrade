@@ -75,6 +75,20 @@ public interface GoodsService {
     List<GoodsListVO> listMyGoods();
 
     /**
+     * 分页获取当前登录用户发布的商品（可选能力，接口契约不变）。
+     *
+     * <p>历史实现一次性把卖家的全部商品读出来（无 LIMIT），商品多的卖家会产生无界查询与无界响应。
+     * 这里提供分页入口：调用方显式传 page/size 时只返回该页记录，返回结构仍是 {@code List<GoodsListVO>}
+     * （与 {@link #listMyGoods()} 完全一致），因此不改变任何既有客户端的行为；
+     * 不传 page/size 时仍走 {@link #listMyGoods()} 的全量语义。</p>
+     *
+     * @param page 页码（从 1 开始）
+     * @param size 每页数量（上限 100）
+     * @return 分页结果（含实际命中的总条数）
+     */
+    IPage<GoodsListVO> pageMyGoods(Integer page, Integer size);
+
+    /**
      * 定时或手动将 Redis 浏览量缓存同步回数据库
      */
     void syncViewCounts();

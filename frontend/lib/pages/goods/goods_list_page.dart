@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import '../../controllers/goods_controller.dart';
 import '../../models/goods_model.dart';
 import '../../routes/app_routes.dart';
+import '../../widgets/goods_thumbnail.dart';
 
 /// 商品列表主页 (支持搜索、分类筛选、分页流式加载)
 class GoodsListPage extends StatefulWidget {
@@ -28,6 +29,18 @@ class _GoodsListPageState extends State<GoodsListPage> {
     if (_scrollController.position.pixels >=
         _scrollController.position.maxScrollExtent - 200) {
       _controller.loadMore();
+    }
+  }
+
+  /// 打开发布页；发布成功后刷新列表（发布页以 `Get.back(result: true)` 标记成功）。
+  ///
+  /// 之前这里是"即发即忘"的 `Get.toNamed`，用户发布完回到集市看不到自己的新商品，
+  /// 必须手动下拉刷新——这是体验上最容易被察觉的"数据不一致"。
+  Future<void> _openCreateGoods() async {
+    final result = await Get.toNamed(AppRoutes.goodsCreate);
+    if (!mounted) return;
+    if (result == true) {
+      _controller.loadGoods(refresh: true);
     }
   }
 
@@ -79,7 +92,7 @@ class _GoodsListPageState extends State<GoodsListPage> {
         ),
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Get.toNamed(AppRoutes.goodsCreate),
+        onPressed: _openCreateGoods,
         icon: const Icon(Icons.add),
         label: const Text('发布闲置'),
         backgroundColor: theme.colorScheme.primary,
@@ -138,7 +151,10 @@ class _GoodsListPageState extends State<GoodsListPage> {
           // 商品网格列表
           Expanded(
             child: Obx(() {
-              if (_controller.isLoading.value) {
+              // 只有"首次加载 / 空列表刷新"才整屏 loading：
+              // 已有数据时刷新（下拉刷新、发布后回刷、切分类）保留当前列表，
+              // 避免整屏闪烁成菊花再跳回（对齐收藏/足迹页的判定条件）。
+              if (_controller.isLoading.value && _controller.goodsList.isEmpty) {
                 return const Center(child: CircularProgressIndicator());
               }
 
@@ -308,13 +324,10 @@ class _GoodsListPageState extends State<GoodsListPage> {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  goods.coverImage != null && goods.coverImage!.isNotEmpty
-                      ? Image.network(
-                          goods.coverImage!,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, _, _) => _buildPlaceholder(),
-                        )
-                      : _buildPlaceholder(),
+                  GoodsThumbnail(
+                    imageUrl: goods.coverImage,
+                    borderRadius: 0,
+                  ),
                   // 成色标签 (右上角)
                   Positioned(
                     top: 6,
@@ -406,15 +419,6 @@ class _GoodsListPageState extends State<GoodsListPage> {
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildPlaceholder() {
-    return Container(
-      color: Colors.grey.shade100,
-      child: Center(
-        child: Icon(Icons.image_outlined, size: 40, color: Colors.grey.shade300),
       ),
     );
   }

@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import '../../controllers/order_controller.dart';
 import '../../models/order.dart';
 import '../../routes/app_routes.dart';
+import '../../widgets/goods_thumbnail.dart';
 
 /// 订单列表浏览页面 (我的购买 / 我的出售)
 /// 提供视角切换、状态筛选、分页浏览与详情跳转功能
@@ -254,15 +255,13 @@ class _MyOrdersPageState extends State<MyOrdersPage>
                     child: SizedBox(
                       width: 76,
                       height: 76,
-                      child: order.goodsImageSnapshot != null &&
-                              order.goodsImageSnapshot!.isNotEmpty
-                          ? Image.network(
-                              order.goodsImageSnapshot!,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) =>
-                                  _buildImageFallback(),
-                            )
-                          : _buildImageFallback(),
+                      child: GoodsThumbnail(
+                        imageUrl: order.goodsImageSnapshot,
+                        width: 76,
+                        height: 76,
+                        borderRadius: 0,
+                        placeholderIcon: Icons.receipt_long_outlined,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -405,15 +404,6 @@ class _MyOrdersPageState extends State<MyOrdersPage>
           fontWeight: FontWeight.bold,
         ),
       ),
-    );
-  }
-
-  /// 缺省图片占位
-  Widget _buildImageFallback() {
-    return Container(
-      color: Colors.grey.shade100,
-      alignment: Alignment.center,
-      child: Icon(Icons.image_outlined, color: Colors.grey.shade400, size: 28),
     );
   }
 

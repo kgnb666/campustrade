@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import '../config/app_config.dart';
 import '../models/category_model.dart';
 import '../models/goods_model.dart';
 import '../services/goods_service.dart';
@@ -126,13 +127,13 @@ class GoodsController extends GetxController {
       final res = searchKeyword.value.isNotEmpty
           ? await _goodsService.searchGoods(
               page: page,
-              size: 10,
+              size: AppConfig.goodsPageSize,
               keyword: searchKeyword.value,
               categoryId: selectedCategoryId.value,
             )
           : await _goodsService.getGoodsList(
               page: page,
-              size: 10,
+              size: AppConfig.goodsPageSize,
               categoryId: selectedCategoryId.value,
             );
 

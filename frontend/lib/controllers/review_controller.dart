@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import '../api/review_api.dart';
+import '../config/app_config.dart';
 import '../utils/api_error.dart';
 import '../models/api_response.dart';
 import '../models/review.dart';
@@ -157,7 +158,7 @@ class ReviewController extends GetxController {
   Future<List<ReviewModel>> fetchGoodsReviews(
     String goodsId, {
     int page = 1,
-    int size = 10,
+    int size = AppConfig.reviewPageSize,
     bool refresh = true,
   }) async {
     loadingGoodsReviews.value = true;
@@ -186,7 +187,7 @@ class ReviewController extends GetxController {
   Future<void> fetchUserReviews(
     String userId, {
     int page = 1,
-    int size = 10,
+    int size = AppConfig.reviewPageSize,
     bool refresh = true,
   }) async {
     // 先登记"已为该用户发起过加载"，避免页面 build 阶段反复触发（空列表也会被判为未加载）

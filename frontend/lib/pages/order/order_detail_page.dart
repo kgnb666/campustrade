@@ -7,6 +7,7 @@ import '../../controllers/review_controller.dart';
 import '../../models/order.dart';
 import '../../models/review.dart';
 import '../../utils/name_utils.dart';
+import '../../widgets/goods_thumbnail.dart';
 import '../review/create_review_sheet.dart';
 
 /// 订单详情浏览页面
@@ -694,15 +695,13 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                   child: SizedBox(
                     width: 84,
                     height: 84,
-                    child: order.goodsImageSnapshot != null &&
-                            order.goodsImageSnapshot!.isNotEmpty
-                        ? Image.network(
-                            order.goodsImageSnapshot!,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) =>
-                                _buildSnapshotFallback(),
-                          )
-                        : _buildSnapshotFallback(),
+                    child: GoodsThumbnail(
+                      imageUrl: order.goodsImageSnapshot,
+                      width: 84,
+                      height: 84,
+                      borderRadius: 0,
+                      placeholderIcon: Icons.receipt_long_outlined,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 14),
@@ -1140,14 +1139,6 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           fontWeight: FontWeight.bold,
         ),
       ),
-    );
-  }
-
-  Widget _buildSnapshotFallback() {
-    return Container(
-      color: Colors.grey.shade100,
-      alignment: Alignment.center,
-      child: Icon(Icons.image_outlined, color: Colors.grey.shade400, size: 32),
     );
   }
 

@@ -4,6 +4,7 @@ import '../../controllers/goods_controller.dart';
 import '../../models/goods_model.dart';
 import '../../routes/app_routes.dart';
 import '../../models/status_enums.dart';
+import '../../widgets/goods_thumbnail.dart';
 
 /// 我的发布商品管理页面
 class MyGoodsPage extends StatefulWidget {
@@ -144,13 +145,12 @@ class _MyGoodsPageState extends State<MyGoodsPage> {
                     child: SizedBox(
                       width: 80,
                       height: 80,
-                      child: goods.coverImage != null && goods.coverImage!.isNotEmpty
-                          ? Image.network(
-                              goods.coverImage!,
-                              fit: BoxFit.cover,
-                              errorBuilder: (_, _, _) => _buildPlaceholder(),
-                            )
-                          : _buildPlaceholder(),
+                      child: GoodsThumbnail(
+                        imageUrl: goods.coverImage,
+                        width: 80,
+                        height: 80,
+                        borderRadius: 0,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -294,15 +294,6 @@ class _MyGoodsPageState extends State<MyGoodsPage> {
             child: const Text('确认删除'),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildPlaceholder() {
-    return Container(
-      color: Colors.grey.shade100,
-      child: Center(
-        child: Icon(Icons.image_outlined, size: 32, color: Colors.grey.shade300),
       ),
     );
   }

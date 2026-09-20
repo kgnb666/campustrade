@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
+import '../config/app_config.dart';
 import '../models/favorite_model.dart';
 import '../services/favorite_service.dart';
 import '../utils/api_error.dart';
@@ -62,7 +63,7 @@ class FavoriteController extends GetxController {
     try {
       final res = await _favoriteService.getFavoriteList(
         page: page,
-        size: 10,
+        size: AppConfig.favoritePageSize,
       );
 
       if (_isStale(requestId)) return;

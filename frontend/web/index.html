@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
   <!--
     If you are serving your web app in a path other than the root, change the
@@ -18,21 +18,137 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="CampusTrade 校园二手交易平台：本校学生之间发布、搜索与面交闲置商品，支持校园身份认证、收藏足迹、订单流转与信用评价。">
+  <meta name="keywords" content="校园二手,二手交易,闲置转让,校园集市,CampusTrade">
+  <meta name="theme-color" content="#4A6CF7">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="frontend">
+  <meta name="apple-mobile-web-app-title" content="CampusTrade">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>frontend</title>
+  <title>CampusTrade 校园二手交易平台</title>
   <link rel="manifest" href="manifest.json">
+
+  <!--
+    首屏启动占位（避免纯白屏）：
+    Web 端首次访问需要下载 CanvasKit / main.dart.js 并初始化引擎，这段时间
+    Flutter 还没有接管 DOM，页面此前是完全空白的（用户容易误判成"打不开"）。
+    这里先用纯 HTML/CSS 渲染一个品牌化的加载态：不依赖任何外部资源、不影响
+    Flutter 接管，脚本侧会在这两项就绪后主动移除它（见 body 末尾）。
+  -->
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+    }
+    body {
+      background: #F7F8FA;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+      color: #1F2937;
+    }
+    #boot-splash {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 18px;
+      background: #F7F8FA;
+      transition: opacity .25s ease-out;
+      z-index: 9999;
+    }
+    #boot-splash.is-hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .boot-splash__logo {
+      width: 68px;
+      height: 68px;
+      border-radius: 18px;
+      background: #4A6CF7;
+      color: #FFFFFF;
+      font-size: 32px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 8px 24px rgba(74, 108, 247, .28);
+    }
+    .boot-splash__title {
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: .5px;
+    }
+    .boot-splash__tip {
+      font-size: 13px;
+      color: #6B7280;
+    }
+    .boot-splash__bar {
+      width: 132px;
+      height: 3px;
+      border-radius: 2px;
+      background: #E5E7EB;
+      overflow: hidden;
+    }
+    .boot-splash__bar::after {
+      content: "";
+      display: block;
+      width: 40%;
+      height: 100%;
+      border-radius: 2px;
+      background: #4A6CF7;
+      animation: boot-splash-slide 1.1s ease-in-out infinite;
+    }
+    @keyframes boot-splash-slide {
+      0%   { transform: translateX(-110%); }
+      100% { transform: translateX(280%); }
+    }
+    @media (prefers-color-scheme: dark) {
+      body, #boot-splash { background: #111827; color: #F9FAFB; }
+      .boot-splash__tip { color: #9CA3AF; }
+      .boot-splash__bar { background: #374151; }
+    }
+  </style>
 </head>
 <body>
+  <!-- 首屏占位：Flutter 接管后由下方脚本移除 -->
+  <div id="boot-splash">
+    <div class="boot-splash__logo">C</div>
+    <div class="boot-splash__title">CampusTrade 校园二手交易平台</div>
+    <div class="boot-splash__bar"></div>
+    <div class="boot-splash__tip">正在加载校园集市，请稍候…</div>
+  </div>
+
+  <script>
+    // 首屏占位的移除时机：
+    //   Flutter Web 加载完成后会触发 "flutter-first-frame"（引擎渲染出第一帧，
+    //   即真正的应用界面已经可见）。此时再淡出占位，避免出现"占位块消失但界面还没
+    //   画出来"的空窗期；同时保留 15s 兜底，任何异常情况下也不至于永远挡住界面。
+    (function () {
+      var splash = document.getElementById('boot-splash');
+      if (!splash) return;
+      var removed = false;
+      function hideSplash() {
+        if (removed) return;
+        removed = true;
+        splash.classList.add('is-hidden');
+        setTimeout(function () {
+          if (splash.parentNode) splash.parentNode.removeChild(splash);
+        }, 300);
+      }
+      window.addEventListener('flutter-first-frame', hideSplash, { once: true });
+      setTimeout(hideSplash, 15000);
+    })();
+  </script>
+
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
