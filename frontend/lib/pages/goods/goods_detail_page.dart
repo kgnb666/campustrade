@@ -8,6 +8,8 @@ import '../../routes/app_routes.dart';
 import '../../services/favorite_service.dart';
 import '../../services/goods_service.dart';
 import '../../models/status_enums.dart';
+import '../../utils/api_error.dart';
+import '../../utils/name_utils.dart';
 
 /// 商品详情页 (图片轮播、价格、描述、卖家认证与信用分展示)
 class GoodsDetailPage extends StatefulWidget {
@@ -31,6 +33,10 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
   bool _isFavorite = false;
   int _favoriteCount = 0;
   int _currentImageIndex = 0;
+
+  /// 加载失败原因（空字符串表示正常）。
+  /// 与 [_goods] == null 的"商品确实不存在"严格区分：断网/超时不再显示"商品不存在"。
+  String _loadError = '';
   final PageController _pageController = PageController();
 
   @override
@@ -48,9 +54,13 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
 
     // 商品 ID 全程按字符串传递：19 位雪花 ID 在 Web 上转 int 会丢尾数（实测 ...241 会变成 ...200）
     final id = goodsId.toString();
-    setState(() => _isLoading = true);
-    final detail = await _goodsService.getGoodsDetail(id);
-    if (mounted) {
+    setState(() {
+      _isLoading = true;
+      _loadError = '';
+    });
+    try {
+      final detail = await _goodsService.getGoodsDetail(id);
+      if (!mounted) return;
       setState(() {
         _goods = detail;
         _isFavorite = detail?.isFavorite ?? false;
@@ -60,6 +70,14 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
       if (detail != null) {
         _reviewController.fetchGoodsReviews(detail.id);
       }
+    } catch (e, stack) {
+      // 请求失败 => 错误态 + 重试；不再与"商品不存在"混成同一个画面
+      debugPrint('[GoodsDetailPage] _loadDetail id=$id error: $e\n$stack');
+      if (!mounted) return;
+      setState(() {
+        _loadError = describeApiError(e, fallback: '商品详情加载失败');
+        _isLoading = false;
+      });
     }
   }
 
@@ -82,28 +100,32 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
     });
 
     try {
-      bool ok;
+      // 收藏接口失败会抛 ApiException（不再返回 false），据此回滚乐观更新并给出具体原因
       if (newStatus) {
-        ok = await _favoriteService.addFavorite(_goods!.id);
+        await _favoriteService.addFavorite(_goods!.id);
       } else {
-        ok = await _favoriteService.removeFavorite(_goods!.id);
+        await _favoriteService.removeFavorite(_goods!.id);
       }
 
-      if (!ok) {
-        if (mounted) {
-          setState(() {
-            _isFavorite = !newStatus;
-            _favoriteCount += newStatus ? -1 : 1;
-            if (_favoriteCount < 0) _favoriteCount = 0;
-          });
-        }
-        Get.snackbar('提示', '操作失败，请重试');
-      } else {
+      if (!mounted) return;
+      Get.snackbar(
+        '提示',
+        newStatus ? '已添加至我的收藏' : '已取消收藏',
+        snackPosition: SnackPosition.BOTTOM,
+        duration: const Duration(seconds: 1),
+      );
+    } catch (e, stack) {
+      debugPrint('[GoodsDetailPage] _toggleFavorite error: $e\n$stack');
+      if (mounted) {
+        setState(() {
+          _isFavorite = !newStatus;
+          _favoriteCount += newStatus ? -1 : 1;
+          if (_favoriteCount < 0) _favoriteCount = 0;
+        });
         Get.snackbar(
-          '提示',
-          newStatus ? '已添加至我的收藏' : '已取消收藏',
+          '收藏失败',
+          describeApiError(e, fallback: '操作失败，请重试'),
           snackPosition: SnackPosition.BOTTOM,
-          duration: const Duration(seconds: 1),
         );
       }
     } finally {
@@ -125,6 +147,44 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
       return Scaffold(
         appBar: AppBar(title: const Text('商品详情')),
         body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    // 加载失败（断网/超时/服务端错误）：错误态 + 重试，绝不显示"商品不存在"
+    if (_loadError.isNotEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('商品详情')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.cloud_off_outlined, size: 64, color: Colors.grey.shade400),
+                const SizedBox(height: 12),
+                const Text('商品详情加载失败',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                Text(
+                  _loadError,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton.icon(
+                  onPressed: _loadDetail,
+                  icon: const Icon(Icons.refresh, size: 18),
+                  label: const Text('点击重试'),
+                ),
+                const SizedBox(height: 8),
+                TextButton(
+                  onPressed: () => Get.back(),
+                  child: const Text('返回上一页'),
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 
@@ -468,8 +528,19 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
                         final targetStatus = isBuyable
                             ? GoodsStatus.offShelf.code
                             : GoodsStatus.onSale.code;
-                        await _goodsService.updateGoodsStatus(goods.id, targetStatus);
-                        _loadDetail();
+                        try {
+                          await _goodsService.updateGoodsStatus(goods.id, targetStatus);
+                          if (!mounted) return;
+                          await _loadDetail();
+                        } catch (e, stack) {
+                          debugPrint('[GoodsDetailPage] 上下架失败: $e\n$stack');
+                          if (!mounted) return;
+                          Get.snackbar(
+                            '操作失败',
+                            describeApiError(e, fallback: '商品状态修改失败'),
+                            snackPosition: SnackPosition.BOTTOM,
+                          );
+                        }
                       },
                       child: Text(isBuyable ? '下架商品' : '重新上架'),
                     ),
@@ -567,6 +638,9 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
   }
 
   /// 弹出立即下单确认抽屉
+  ///
+  /// 抽屉内的两个输入控制器由抽屉自身的 State 持有并 dispose
+  /// （原先在抽屉外部创建、从不释放，反复打开会持续泄漏）。
   void _showCreateOrderSheet(BuildContext context, GoodsDetailModel goods) {
     final user = _authController.currentUser.value;
     if (user == null) {
@@ -574,177 +648,13 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
       return;
     }
 
-    final locationController = TextEditingController(text: goods.location ?? '');
-    final messageController = TextEditingController();
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (sheetContext) {
-        return Padding(
-          padding: EdgeInsets.only(
-            left: 20,
-            right: 20,
-            top: 20,
-            bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
-          ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    const Icon(Icons.shopping_bag_outlined, color: Colors.blueAccent),
-                    const SizedBox(width: 8),
-                    const Text(
-                      '确认购买意向与下单',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                    ),
-                    const Spacer(),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.pop(sheetContext),
-                    ),
-                  ],
-                ),
-                const Divider(height: 20),
-
-                // 商品快照简要展示
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.grey.shade200),
-                  ),
-                  child: Row(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: SizedBox(
-                          width: 60,
-                          height: 60,
-                          child: goods.images.isNotEmpty
-                              ? Image.network(
-                                  goods.images.first,
-                                  fit: BoxFit.cover,
-                                  errorBuilder: (_, _, _) => Container(
-                                    color: Colors.grey.shade200,
-                                    child: const Icon(Icons.image_outlined, color: Colors.grey),
-                                  ),
-                                )
-                              : Container(
-                                  color: Colors.grey.shade200,
-                                  child: const Icon(Icons.image_outlined, color: Colors.grey),
-                                ),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              goods.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '¥${goods.price.toStringAsFixed(2)}',
-                              style: TextStyle(
-                                color: Theme.of(context).colorScheme.primary,
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // 面交地点输入
-                TextField(
-                  controller: locationController,
-                  decoration: const InputDecoration(
-                    labelText: '约定面交地点',
-                    hintText: '如：二食堂门口、图书馆大厅',
-                    prefixIcon: Icon(Icons.place_outlined),
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 14),
-
-                // 买家留言输入
-                TextField(
-                  controller: messageController,
-                  maxLines: 2,
-                  decoration: const InputDecoration(
-                    labelText: '买家留言 (选填)',
-                    hintText: '如希望面交时间、当面验货注意事项等',
-                    prefixIcon: Icon(Icons.comment_outlined),
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 20),
-
-                // 确认下单按钮
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                  onPressed: () async {
-                    final orderController = Get.isRegistered<OrderController>()
-                        ? Get.find<OrderController>()
-                        : Get.put(OrderController());
-
-                    final meetLoc = locationController.text.trim();
-                    final msg = messageController.text.trim();
-
-                    final newOrder = await orderController.createOrder(
-                      goodsId: goods.id,
-                      meetLocation: meetLoc.isNotEmpty ? meetLoc : null,
-                      buyerMessage: msg.isNotEmpty ? msg : null,
-                    );
-
-                    if (newOrder != null) {
-                      if (sheetContext.mounted) {
-                        Navigator.pop(sheetContext);
-                      }
-                      Get.toNamed(AppRoutes.orderDetail, arguments: newOrder.id);
-                      Get.snackbar(
-                        '下单成功',
-                        '订单 ${newOrder.orderNo} 已生成，等待卖家接单确认',
-                        snackPosition: SnackPosition.BOTTOM,
-                      );
-                    } else {
-                      Get.snackbar(
-                        '下单失败',
-                        orderController.errorMessage.value.isNotEmpty
-                            ? orderController.errorMessage.value
-                            : '创建订单失败，请稍后重试',
-                        snackPosition: SnackPosition.BOTTOM,
-                      );
-                    }
-                  },
-                  child: const Text('确认下单', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      builder: (sheetContext) => _CreateOrderSheet(goods: goods),
     );
   }
 
@@ -826,7 +736,7 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
                                   : null,
                               child: review.displayAvatar == null
                                   ? Text(
-                                      review.displayNickname.substring(0, 1),
+                                      initialOf(review.displayNickname, '用户'),
                                       style: const TextStyle(fontSize: 11),
                                     )
                                   : null,
@@ -927,5 +837,214 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
         ),
       );
     });
+  }
+}
+
+/// 立即下单确认抽屉（独立 StatefulWidget）
+///
+/// 面交地点 / 买家留言两个输入框的控制器由本 State 持有并释放，
+/// 与抽屉的打开-关闭生命周期严格对齐；提交逻辑与改造前完全一致。
+class _CreateOrderSheet extends StatefulWidget {
+  const _CreateOrderSheet({required this.goods});
+
+  final GoodsDetailModel goods;
+
+  @override
+  State<_CreateOrderSheet> createState() => _CreateOrderSheetState();
+}
+
+class _CreateOrderSheetState extends State<_CreateOrderSheet> {
+  late final TextEditingController _locationController;
+  late final TextEditingController _messageController;
+  bool _isSubmitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _locationController =
+        TextEditingController(text: widget.goods.location ?? '');
+    _messageController = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _locationController.dispose();
+    _messageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_isSubmitting) return;
+    final meetLoc = _locationController.text.trim();
+    final msg = _messageController.text.trim();
+
+    setState(() => _isSubmitting = true);
+    try {
+      final orderController = Get.isRegistered<OrderController>()
+          ? Get.find<OrderController>()
+          : Get.put(OrderController());
+
+      final newOrder = await orderController.createOrder(
+        goodsId: widget.goods.id,
+        meetLocation: meetLoc.isNotEmpty ? meetLoc : null,
+        buyerMessage: msg.isNotEmpty ? msg : null,
+      );
+
+      if (!mounted) return;
+
+      if (newOrder != null) {
+        Navigator.pop(context);
+        Get.toNamed(AppRoutes.orderDetail, arguments: newOrder.id);
+        Get.snackbar(
+          '下单成功',
+          '订单 ${newOrder.orderNo} 已生成，等待卖家接单确认',
+          snackPosition: SnackPosition.BOTTOM,
+        );
+      } else {
+        Get.snackbar(
+          '下单失败',
+          orderController.errorMessage.value.isNotEmpty
+              ? orderController.errorMessage.value
+              : '创建订单失败，请稍后重试',
+          snackPosition: SnackPosition.BOTTOM,
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final goods = widget.goods;
+    final theme = Theme.of(context);
+
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 20,
+        right: 20,
+        top: 20,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.shopping_bag_outlined, color: Colors.blueAccent),
+                const SizedBox(width: 8),
+                const Text(
+                  '确认购买意向与下单',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            const Divider(height: 20),
+
+            // 商品快照简要展示
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Row(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: SizedBox(
+                      width: 60,
+                      height: 60,
+                      child: goods.images.isNotEmpty
+                          ? Image.network(
+                              goods.images.first,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, _, _) => Container(
+                                color: Colors.grey.shade200,
+                                child: const Icon(Icons.image_outlined, color: Colors.grey),
+                              ),
+                            )
+                          : Container(
+                              color: Colors.grey.shade200,
+                              child: const Icon(Icons.image_outlined, color: Colors.grey),
+                            ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          goods.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '¥${goods.price.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            color: theme.colorScheme.primary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // 面交地点输入
+            TextField(
+              controller: _locationController,
+              decoration: const InputDecoration(
+                labelText: '约定面交地点',
+                hintText: '如：二食堂门口、图书馆大厅',
+                prefixIcon: Icon(Icons.place_outlined),
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 14),
+
+            // 买家留言输入
+            TextField(
+              controller: _messageController,
+              maxLines: 2,
+              decoration: const InputDecoration(
+                labelText: '买家留言 (选填)',
+                hintText: '如希望面交时间、当面验货注意事项等',
+                prefixIcon: Icon(Icons.comment_outlined),
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 20),
+
+            // 确认下单按钮
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              onPressed: _isSubmitting ? null : _submit,
+              child: const Text('确认下单', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

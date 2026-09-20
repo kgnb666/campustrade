@@ -1,6 +1,8 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:frontend/api/dio_client.dart';
 import 'package:frontend/controllers/auth_controller.dart';
 import 'package:frontend/main.dart';
 import 'package:frontend/models/user_model.dart';
@@ -11,14 +13,67 @@ import 'package:frontend/pages/profile/student_verify_page.dart';
 import 'package:frontend/routes/app_pages.dart';
 import 'package:frontend/routes/app_routes.dart';
 import 'package:frontend/services/storage_service.dart';
-import 'package:get/get.dart';
+import 'package:get/get.dart' hide Response;
 
 void main() {
+  Interceptor? mockInterceptor;
+
+  /// 安装一个统一的接口桩：拦截所有请求并直接返回给定的 [Response]。
+  /// 阶段 6 起"请求失败"与"确实没有数据"在页面上必须区分，因此空态测试
+  /// 必须显式给出"接口成功但列表为空"的响应，而不是依赖测试环境默认的 400。
+  void installMockApi(Response Function(RequestOptions options) responder) {
+    if (mockInterceptor != null) {
+      DioClient().dio.interceptors.remove(mockInterceptor);
+    }
+    mockInterceptor = InterceptorsWrapper(
+      onRequest: (options, handler) {
+        try {
+          return handler.resolve(responder(options));
+        } on DioException catch (dioErr) {
+          return handler.reject(dioErr);
+        } catch (e) {
+          return handler.reject(DioException(
+            requestOptions: options,
+            error: e,
+            type: DioExceptionType.unknown,
+          ));
+        }
+      },
+    );
+    DioClient().dio.interceptors.insert(0, mockInterceptor!);
+  }
+
+  Response emptyPage(RequestOptions options) {
+    return Response(
+      requestOptions: options,
+      statusCode: 200,
+      data: {
+        'code': 200,
+        'message': 'success',
+        'data': {
+          'records': <dynamic>[],
+          'total': 0,
+          'size': 10,
+          'current': 1,
+          'pages': 1,
+        },
+      },
+    );
+  }
+
   setUp(() async {
     Get.reset();
     FlutterSecureStorage.setMockInitialValues({});
     await Get.putAsync(() => StorageService().init());
     Get.put(AuthController());
+  });
+
+  tearDown(() {
+    if (mockInterceptor != null) {
+      DioClient().dio.interceptors.remove(mockInterceptor);
+      mockInterceptor = null;
+    }
+    Get.reset();
   });
 
   testWidgets('1. 验证首页渲染与 Stage 1 标志', (WidgetTester tester) async {
@@ -203,6 +258,9 @@ void main() {
   });
 
   testWidgets('10. 验证我的收藏页面渲染与空状态', (WidgetTester tester) async {
+    // 真正的空态：接口成功返回空列表（而非请求失败）
+    installMockApi(emptyPage);
+
     await tester.pumpWidget(
       GetMaterialApp(
         initialRoute: AppRoutes.favorite,
@@ -217,6 +275,9 @@ void main() {
   });
 
   testWidgets('11. 验证浏览足迹页面渲染与空状态', (WidgetTester tester) async {
+    // 真正的空态：接口成功返回空列表（而非请求失败）
+    installMockApi(emptyPage);
+
     await tester.pumpWidget(
       GetMaterialApp(
         initialRoute: AppRoutes.history,

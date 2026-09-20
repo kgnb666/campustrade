@@ -92,10 +92,17 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
     });
   }
 
+  /// 分类加载失败原因（空字符串表示正常）：页面内联展示 + 重试入口。
+  /// 不用 snackbar：这个失败发生在页面打开瞬间，弹窗式提示会在页面还没稳定时出现，
+  /// 用户也容易错过；内联提示更符合"可见降级"。
+  String _categoryError = '';
+
   Future<void> _loadCategories() async {
-    final list = await _goodsService.getCategories();
-    if (mounted) {
+    try {
+      final list = await _goodsService.getCategories();
+      if (!mounted) return;
       setState(() {
+        _categoryError = '';
         _categories.clear();
         // 展平为所有叶子分类供选择
         for (var parent in list) {
@@ -114,6 +121,12 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
           if (match.isNotEmpty) _pendingCategoryId = null;
         }
       });
+    } catch (e, stack) {
+      debugPrint('[CreateGoodsPage] _loadCategories error: $e\n$stack');
+      if (!mounted) return;
+      setState(() {
+        _categoryError = describeApiError(e, fallback: '分类加载失败，请检查网络后重试');
+      });
     }
   }
 
@@ -122,12 +135,13 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
     setState(() => _isLoadingDetail = true);
     try {
       final detail = await _goodsService.getGoodsDetail(goodsId);
+      // await 之后必须重新确认 State 仍然挂载，否则在已销毁的页面上 setState/导航
+      if (!mounted) return;
       if (detail == null) {
         Get.snackbar('提示', '商品不存在或已下架，无法编辑');
         Get.back();
         return;
       }
-      if (!mounted) return;
       setState(() {
         _titleCtrl.text = detail.title;
         _descCtrl.text = detail.description;
@@ -149,6 +163,13 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
           _pendingCategoryId = null;
         }
       });
+    } catch (e, stack) {
+      // 详情拉取失败（断网/超时）不再冒充"商品不存在"：给出原因并留在页面
+      debugPrint('[CreateGoodsPage] _loadGoodsForEdit id=$goodsId error: $e\n$stack');
+      if (!mounted) return;
+      Get.snackbar('加载失败',
+          describeApiError(e, fallback: '商品详情加载失败，请检查网络后重试'),
+          snackPosition: SnackPosition.BOTTOM);
     } finally {
       if (mounted) setState(() => _isLoadingDetail = false);
     }
@@ -172,13 +193,14 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
       imageQuality: 85,
     );
 
-    if (pickedFile == null) return;
+    if (pickedFile == null || !mounted) return;
 
     setState(() => _isUploadingImage = true);
 
     try {
       final bytes = await pickedFile.readAsBytes();
       final url = await _goodsService.uploadImageBytes(bytes, pickedFile.name);
+      if (!mounted) return;
       setState(() {
         _uploadedImages.add(url);
       });
@@ -219,6 +241,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
 
       if (_isEditing) {
         await _goodsService.updateGoods(_editingGoodsId!, data);
+        if (!mounted) return;
         Get.snackbar(
           '修改成功',
           '商品信息已更新！',
@@ -228,6 +251,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
         );
       } else {
         await _goodsService.createGoods(data);
+        if (!mounted) return;
         Get.snackbar(
           '发布成功',
           '商品已进入出售状态！',
@@ -366,6 +390,27 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
                 }).toList(),
                 onChanged: (cat) => setState(() => _selectedCategory = cat),
               ),
+              // 分类加载失败的可见降级：内联提示 + 重新加载
+              if (_categoryError.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.error_outline, size: 16, color: Colors.orange),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _categoryError,
+                          style: TextStyle(fontSize: 12, color: Colors.orange[900]),
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: _loadCategories,
+                        child: const Text('重新加载', style: TextStyle(fontSize: 12)),
+                      ),
+                    ],
+                  ),
+                ),
               const SizedBox(height: 16),
 
               // 4. 售价与原价与 AI 估价

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../../controllers/review_controller.dart';
 import '../../models/order.dart';
+import '../../utils/name_utils.dart';
 
 /// 评价发表模态底板组件 (CreateReviewSheet)
 /// 支持 1~5 星交互、500字实时计数、白名单标签点选、匿名保护及防重复提交
@@ -137,9 +138,7 @@ class _CreateReviewSheetState extends State<CreateReviewSheet> {
                           : null,
                       child: targetAvatar == null || targetAvatar.isEmpty
                           ? Text(
-                              targetNickname.isNotEmpty
-                                  ? targetNickname.substring(0, 1).toUpperCase()
-                                  : 'U',
+                              initialOf(targetNickname, '用户'),
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
                                 color: theme.colorScheme.onPrimaryContainer,

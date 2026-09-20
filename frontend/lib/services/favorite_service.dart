@@ -2,31 +2,54 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../api/dio_client.dart';
 import '../models/favorite_model.dart';
+import '../utils/api_error.dart';
 import '../utils/json_cast.dart';
 
 /// 收藏网络服务
+///
+/// 错误处理约定与 [GoodsService] 一致：失败一律抛 [ApiException]（message 为中文文案），
+/// 不再把失败折叠成"空列表 / false"，避免断网与"确实没有数据"在 UI 上同形。
 class FavoriteService {
   final Dio _dio = DioClient().dio;
 
+  String _serverMessage(Response<dynamic> response, String fallback) {
+    final dynamic data = response.data;
+    if (data is Map) {
+      final String message = (data['message'] ?? '').toString().trim();
+      if (message.isNotEmpty) return message;
+    }
+    return fallback;
+  }
+
   /// 添加收藏
-  Future<bool> addFavorite(String goodsId) async {
+  Future<void> addFavorite(String goodsId) async {
     try {
       final response = await _dio.post('/favorite/$goodsId');
-      return response.statusCode == 200 && response.data['code'] == 200;
+      if (response.statusCode != 200 || response.data['code'] != 200) {
+        throw ApiException(
+          _serverMessage(response, '收藏失败'),
+          statusCode: response.statusCode,
+        );
+      }
     } catch (e) {
-      debugPrint('[FavoriteService] addFavorite error: $e');
-      return false;
+      debugPrint('[FavoriteService] addFavorite goodsId=$goodsId error: $e');
+      throw ApiException.from(e, fallback: '收藏失败');
     }
   }
 
   /// 取消收藏
-  Future<bool> removeFavorite(String goodsId) async {
+  Future<void> removeFavorite(String goodsId) async {
     try {
       final response = await _dio.delete('/favorite/$goodsId');
-      return response.statusCode == 200 && response.data['code'] == 200;
+      if (response.statusCode != 200 || response.data['code'] != 200) {
+        throw ApiException(
+          _serverMessage(response, '取消收藏失败'),
+          statusCode: response.statusCode,
+        );
+      }
     } catch (e) {
-      debugPrint('[FavoriteService] removeFavorite error: $e');
-      return false;
+      debugPrint('[FavoriteService] removeFavorite goodsId=$goodsId error: $e');
+      throw ApiException.from(e, fallback: '取消收藏失败');
     }
   }
 
@@ -37,10 +60,13 @@ class FavoriteService {
       if (response.statusCode == 200 && response.data['code'] == 200) {
         return response.data['data'] == true;
       }
-      return false;
+      throw ApiException(
+        _serverMessage(response, '收藏状态查询失败'),
+        statusCode: response.statusCode,
+      );
     } catch (e) {
-      debugPrint('[FavoriteService] checkFavorite error: $e');
-      return false;
+      debugPrint('[FavoriteService] checkFavorite goodsId=$goodsId error: $e');
+      throw ApiException.from(e, fallback: '收藏状态查询失败');
     }
   }
 
@@ -64,10 +90,13 @@ class FavoriteService {
           'pages': asInt(data['pages'], 1),
         };
       }
-      return {'items': <FavoriteItemModel>[], 'total': 0, 'current': 1, 'pages': 1};
+      throw ApiException(
+        _serverMessage(response, '收藏列表加载失败'),
+        statusCode: response.statusCode,
+      );
     } catch (e) {
-      debugPrint('[FavoriteService] getFavoriteList error: $e');
-      return {'items': <FavoriteItemModel>[], 'total': 0, 'current': 1, 'pages': 1};
+      debugPrint('[FavoriteService] getFavoriteList page=$page error: $e');
+      throw ApiException.from(e, fallback: '收藏列表加载失败');
     }
   }
 }

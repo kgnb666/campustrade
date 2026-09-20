@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../models/api_response.dart';
+import '../utils/api_error.dart';
 import '../models/order.dart';
 import 'dio_client.dart';
 
@@ -35,7 +36,7 @@ class OrderApi {
       debugPrint('[OrderApi] createOrder unexpected error: $e');
       return ApiResponse<OrderVO>(
         code: 500,
-        message: '创建订单异常: $e',
+        message: '创建订单失败，请稍后重试',
         data: null,
       );
     }
@@ -71,7 +72,7 @@ class OrderApi {
       debugPrint('[OrderApi] getMyOrders unexpected error: $e');
       return ApiResponse<OrderPageResult>(
         code: 500,
-        message: '获取订单列表异常: $e',
+        message: '订单列表加载失败，请稍后重试',
         data: null,
       );
     }
@@ -92,7 +93,7 @@ class OrderApi {
       debugPrint('[OrderApi] getOrderDetail unexpected error: $e');
       return ApiResponse<OrderVO>(
         code: 500,
-        message: '获取订单详情异常: $e',
+        message: '订单详情加载失败，请稍后重试',
         data: null,
       );
     }
@@ -113,7 +114,7 @@ class OrderApi {
       debugPrint('[OrderApi] confirmOrder unexpected error: $e');
       return ApiResponse<OrderVO>(
         code: 500,
-        message: '卖家确认订单异常: $e',
+        message: '确认接单失败，请稍后重试',
         data: null,
       );
     }
@@ -139,7 +140,7 @@ class OrderApi {
       debugPrint('[OrderApi] cancelOrder unexpected error: $e');
       return ApiResponse<OrderVO>(
         code: 500,
-        message: '取消订单异常: $e',
+        message: '取消订单失败，请稍后重试',
         data: null,
       );
     }
@@ -160,7 +161,7 @@ class OrderApi {
       debugPrint('[OrderApi] completeOrder unexpected error: $e');
       return ApiResponse<OrderVO>(
         code: 500,
-        message: '完成交易异常: $e',
+        message: '完成交易失败，请稍后重试',
         data: null,
       );
     }
@@ -185,8 +186,16 @@ class OrderApi {
       if (rawData != null && code == 200) {
         try {
           parsedData = parser(rawData);
-        } catch (e) {
-          debugPrint('[OrderApi] parser mapping error: $e');
+        } catch (e, stack) {
+          // 解析失败不能静默：否则 code 仍是 200、data 为 null，上层会拿服务端的
+          // 'success' 当错误文案展示，用户看到"success"却不知道哪里出错。
+          debugPrint('[OrderApi] parser mapping error: $e\n$stack');
+          return ApiResponse<T>(
+            code: 500,
+            message: '数据解析失败，请稍后重试',
+            data: null,
+            timestamp: timestamp,
+          );
         }
       }
 
@@ -212,16 +221,19 @@ class OrderApi {
       final code = data['code'] is int
           ? data['code'] as int
           : e.response!.statusCode ?? 500;
-      final message = data['message']?.toString() ?? e.message ?? '网络请求失败';
+      final message = data['message']?.toString().trim() ?? '';
       return ApiResponse<T>(
         code: code,
-        message: message,
+        // 服务端没给 message 时退回统一映射，避免把 Dio 的英文原文弹给用户
+        message: message.isEmpty
+            ? describeApiError(e, fallback: '请求失败，请稍后重试')
+            : message,
         data: null,
       );
     }
     return ApiResponse<T>(
       code: e.response?.statusCode ?? 500,
-      message: e.message ?? '网络连接失败',
+      message: describeApiError(e, fallback: '网络连接失败，请检查网络后重试'),
       data: null,
     );
   }

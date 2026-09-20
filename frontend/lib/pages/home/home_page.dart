@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import '../../config/app_config.dart';
 import '../../controllers/auth_controller.dart';
 import '../../routes/app_routes.dart';
+import '../../utils/name_utils.dart';
 import '../../widgets/status_badge.dart';
 import '../../models/status_enums.dart';
 
@@ -93,7 +94,7 @@ class HomePage extends StatelessWidget {
                               radius: 24,
                               backgroundColor: theme.colorScheme.primary,
                               child: Text(
-                                (user.nickname ?? user.username).substring(0, 1).toUpperCase(),
+                                initialOf(user.nickname, user.username),
                                 style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                               ),
                             ),
@@ -103,7 +104,7 @@ class HomePage extends StatelessWidget {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    '欢迎回来，${user.nickname ?? user.username}！',
+                                    '欢迎回来，${displayNameOf(user.nickname, user.username)}！',
                                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                                   ),
                                   const SizedBox(height: 4),

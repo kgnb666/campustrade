@@ -142,6 +142,11 @@ class _GoodsListPageState extends State<GoodsListPage> {
                 return const Center(child: CircularProgressIndicator());
               }
 
+              // 错误态优先于空态：断网/超时/401 绝不能显示成"暂无在售商品"
+              if (_controller.hasError && _controller.goodsList.isEmpty) {
+                return _buildErrorState(theme);
+              }
+
               if (_controller.goodsList.isEmpty) {
                 return _buildEmptyState(theme);
               }
@@ -209,10 +214,54 @@ class _GoodsListPageState extends State<GoodsListPage> {
                 ),
               );
             }),
+            // 分类加载失败的可见降级：不给用户一个"永远只有全部"的静默筛选栏
+            if (_controller.categories.isEmpty &&
+                _controller.categoryErrorMessage.value.isNotEmpty)
+              ActionChip(
+                avatar: const Icon(Icons.refresh, size: 16),
+                label: const Text('分类加载失败，重试',
+                    style: TextStyle(fontSize: 11)),
+                onPressed: () => _controller.loadCategories(),
+              ),
           ],
         ),
       );
     });
+  }
+
+  /// 加载失败错误态（断网 / 超时 / 服务端错误），与"暂无商品"空态严格区分
+  Widget _buildErrorState(ThemeData theme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cloud_off_outlined, size: 72, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            Text(
+              '商品列表加载失败',
+              style: theme.textTheme.titleMedium?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: Colors.grey.shade700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _controller.errorMessage.value,
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodySmall?.copyWith(color: Colors.grey.shade600),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () => _controller.loadGoods(refresh: true),
+              icon: const Icon(Icons.refresh),
+              label: const Text('点击重试'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   /// 空数据缺省组件

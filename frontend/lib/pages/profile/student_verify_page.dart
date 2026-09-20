@@ -186,6 +186,32 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
                       validator: (v) => v == null ? '请选择高校' : null,
                     );
                   }),
+
+                  // 高校列表加载失败时的可见降级：给出原因 + 重新加载入口，
+                  // 而不是留一个永远空着的下拉框让用户猜。
+                  Obx(() {
+                    final error = _authController.schoolsError.value;
+                    if (error.isEmpty) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.error_outline, size: 16, color: Colors.orange),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              error,
+                              style: TextStyle(fontSize: 12, color: Colors.orange[900]),
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () => _authController.loadSchools(),
+                            child: const Text('重新加载', style: TextStyle(fontSize: 12)),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
                   const SizedBox(height: 16),
 
                   // 步骤 2: 填写学号

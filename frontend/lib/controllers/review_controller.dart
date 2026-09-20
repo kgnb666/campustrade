@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import '../api/review_api.dart';
+import '../utils/api_error.dart';
 import '../models/api_response.dart';
 import '../models/review.dart';
 import 'auth_controller.dart';
@@ -277,9 +278,10 @@ class ReviewController extends GetxController {
         errorMessage.value = res.message;
         return res;
       }
-    } catch (e) {
+    } catch (e, stack) {
+      debugPrint('[ReviewController] submitReview error: $e\n$stack');
       submitState.value = ReviewSubmitState.error;
-      errorMessage.value = '提交评价失败: $e';
+      errorMessage.value = describeApiError(e, fallback: '提交评价失败，请稍后重试');
       return ApiResponse<ReviewModel>(
         code: 500,
         message: errorMessage.value,

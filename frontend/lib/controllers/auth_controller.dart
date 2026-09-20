@@ -5,6 +5,9 @@ import '../api/dio_client.dart';
 import '../models/user_model.dart';
 import '../routes/app_routes.dart';
 import '../services/storage_service.dart';
+import '../utils/api_error.dart';
+import '../utils/name_utils.dart';
+import '../utils/ui_feedback.dart';
 
 /// 全局认证与用户信息状态控制器
 class AuthController extends GetxController {
@@ -16,6 +19,10 @@ class AuthController extends GetxController {
   final RxString token = ''.obs;
   final Rxn<UserProfileModel> currentUser = Rxn<UserProfileModel>();
   final RxList<SchoolModel> schools = <SchoolModel>[].obs;
+
+  /// 高校列表加载失败原因（空字符串表示无错误）。
+  /// 认证页据此给出"重新加载"入口，避免下拉框一直空着而用户不知道原因。
+  final RxString schoolsError = ''.obs;
 
   @override
   void onInit() {
@@ -56,6 +63,9 @@ class AuthController extends GetxController {
         await _storage.saveToken(loginResult.accessToken);
         await _storage.saveRefreshToken(loginResult.refreshToken);
 
+        // 新会话开始：复位"本次会话已过期"标记，否则同一进程内第二次会话过期会被静默忽略
+        _dioClient.markSessionRestored();
+
         if (loginResult.userInfo != null) {
           currentUser.value = loginResult.userInfo;
         } else {
@@ -63,32 +73,30 @@ class AuthController extends GetxController {
         }
 
         isLoggedIn.value = true;
-        Get.snackbar('登录成功', '欢迎回到 CampusTrade，${currentUser.value?.nickname ?? username}！',
+        safeSnackbar('登录成功', '欢迎回到 CampusTrade，${displayNameOf(currentUser.value?.nickname, username)}！',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.green.withAlpha(40),
             colorText: Colors.green[900]);
 
-        Get.offAllNamed(AppRoutes.home);
+        safeOffAllNamed(AppRoutes.home);
         return true;
       } else {
-        Get.snackbar('登录失败', response.data['message'] ?? '用户名或密码错误',
+        safeSnackbar('登录失败', response.data['message'] ?? '用户名或密码错误',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.red.withAlpha(40),
             colorText: Colors.red[900]);
         return false;
       }
     } on DioException catch (e) {
-      final msg = e.response?.data is Map
-          ? e.response?.data['message']
-          : (e.message ?? '网络连接失败');
-      Get.snackbar('登录异常', msg ?? '用户名或密码错误',
+      safeSnackbar('登录异常', describeApiError(e, fallback: '用户名或密码错误'),
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
           colorText: Colors.red[900]);
       return false;
-    } catch (e) {
+    } catch (e, stack) {
       // 兜底：响应解析、本地存储等非网络异常此前会静默逃逸，表现为"点击登录没反应"
-      Get.snackbar('登录异常', '客户端处理异常：$e',
+      debugPrint('[AuthController] login unexpected error: $e\n$stack');
+      safeSnackbar('登录异常', '登录失败，请稍后重试',
           snackPosition: SnackPosition.BOTTOM,
           duration: const Duration(seconds: 6),
           backgroundColor: Colors.red.withAlpha(40),
@@ -110,30 +118,28 @@ class AuthController extends GetxController {
       });
 
       if (response.data['code'] == 200) {
-        Get.snackbar('注册成功', '恭喜您注册成功，已为您自动创建初始 100 信用档案，请登录',
+        safeSnackbar('注册成功', '恭喜您注册成功，已为您自动创建初始 100 信用档案，请登录',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.green.withAlpha(40),
             colorText: Colors.green[900]);
-        Get.offNamed(AppRoutes.login);
+        safeOffNamed(AppRoutes.login);
         return true;
       } else {
-        Get.snackbar('注册失败', response.data['message'] ?? '注册信息有误',
+        safeSnackbar('注册失败', response.data['message'] ?? '注册信息有误',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.red.withAlpha(40),
             colorText: Colors.red[900]);
         return false;
       }
     } on DioException catch (e) {
-      final msg = e.response?.data is Map
-          ? e.response?.data['message']
-          : (e.message ?? '网络连接失败');
-      Get.snackbar('注册异常', msg ?? '注册失败，请稍后重试',
+      safeSnackbar('注册异常', describeApiError(e, fallback: '注册失败，请稍后重试'),
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
           colorText: Colors.red[900]);
       return false;
-    } catch (e) {
-      Get.snackbar('注册异常', '客户端处理异常：$e',
+    } catch (e, stack) {
+      debugPrint('[AuthController] register unexpected error: $e\n$stack');
+      safeSnackbar('注册异常', '注册失败，请稍后重试',
           snackPosition: SnackPosition.BOTTOM,
           duration: const Duration(seconds: 6),
           backgroundColor: Colors.red.withAlpha(40),
@@ -148,7 +154,10 @@ class AuthController extends GetxController {
   Future<void> logout() async {
     try {
       await _dioClient.dio.post('/auth/logout');
-    } catch (_) {}
+    } catch (e) {
+      // 服务端登出失败不影响本地登出：凭据仍会被彻底清除，仅记录日志
+      debugPrint('[AuthController] 登出接口调用失败（本地凭据仍会清除）: $e');
+    }
 
     // 同步清空本地持久化的 token、refreshToken 与用户信息，避免任何残留状态泄露
     await _storage.clearAll();
@@ -160,31 +169,39 @@ class AuthController extends GetxController {
 
     try {
       if (Get.context != null) {
-        Get.snackbar('已安全退出', '您已安全退出当前账号',
+        safeSnackbar('已安全退出', '您已安全退出当前账号',
             snackPosition: SnackPosition.BOTTOM);
-        Get.offAllNamed(AppRoutes.home);
+        safeOffAllNamed(AppRoutes.home);
       }
-    } catch (_) {}
+    } catch (e, stack) {
+      debugPrint('[AuthController] 登出后跳转失败: $e\n$stack');
+    }
   }
 
   /// 登录会话过期处理 (无感刷新彻底失败后的优雅降级)
+  ///
+  /// 由 [DioClient] 在"刷新也失败"时真实调用（单一落点）：
+  /// 清空本地凭据与内存态、提示用户并跳转登录页。
+  /// 注意：这里**不**复位 [DioClient] 的会话过期去重标记——该标记表示
+  /// "本轮会话已处理完过期"，只有重新登录成功才会复位。
   Future<void> handleSessionExpired() async {
     await _storage.clearAll();
     token.value = '';
     isLoggedIn.value = false;
     currentUser.value = null;
 
-    _dioClient.resetSessionState();
-
     try {
       if (Get.context != null && Get.currentRoute != AppRoutes.LOGIN) {
-        Get.snackbar('登录已失效', '您的登录会话已过期，请重新登录',
+        safeSnackbar('登录已失效', '您的登录会话已过期，请重新登录',
             snackPosition: SnackPosition.TOP,
             backgroundColor: Colors.orange.withAlpha(40),
             colorText: Colors.orange[900]);
-        Get.offAllNamed(AppRoutes.LOGIN);
+        safeOffAllNamed(AppRoutes.LOGIN);
       }
-    } catch (_) {}
+    } catch (e, stack) {
+      // 没有 Navigator（单元测试）时跳转会失败，但不能因此中断上面的凭据清理
+      debugPrint('[AuthController] 会话过期跳转登录失败: $e\n$stack');
+    }
   }
 
   /// 拉取最新个人信息
@@ -195,8 +212,11 @@ class AuthController extends GetxController {
         currentUser.value = UserProfileModel.fromJson(response.data['data']);
         return true;
       }
+      debugPrint('[AuthController] fetchProfile 返回非 200: ${response.data['message']}');
       return false;
     } catch (e) {
+      // 自动登录路径依赖 false 触发本地凭据清理，因此这里不向上抛，只记录
+      debugPrint('[AuthController] fetchProfile error: $e');
       return false;
     }
   }
@@ -213,18 +233,19 @@ class AuthController extends GetxController {
 
       if (response.data['code'] == 200) {
         currentUser.value = UserProfileModel.fromJson(response.data['data']);
-        Get.snackbar('修改成功', '个人资料已更新',
+        safeSnackbar('修改成功', '个人资料已更新',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.green.withAlpha(40),
             colorText: Colors.green[900]);
         return true;
       } else {
-        Get.snackbar('修改失败', response.data['message'] ?? '修改失败',
+        safeSnackbar('修改失败', response.data['message'] ?? '修改失败',
             snackPosition: SnackPosition.BOTTOM);
         return false;
       }
     } catch (e) {
-      Get.snackbar('修改异常', '更新资料时发生错误',
+      debugPrint('[AuthController] updateProfile error: $e');
+      safeSnackbar('修改异常', describeApiError(e, fallback: '更新资料时发生错误'),
           snackPosition: SnackPosition.BOTTOM);
       return false;
     } finally {
@@ -233,6 +254,9 @@ class AuthController extends GetxController {
   }
 
   /// 加载高校列表
+  ///
+  /// 失败不再静默：记录日志、把原因写进 [schoolsError]，认证页据此给出"重新加载"入口，
+  /// 避免用户面对一个永远空着的下拉框却不知道发生了什么。
   Future<void> loadSchools() async {
     try {
       final response = await _dioClient.dio.get('/school/list');
@@ -241,8 +265,15 @@ class AuthController extends GetxController {
             .map((item) => SchoolModel.fromJson(item as Map<String, dynamic>))
             .toList();
         schools.assignAll(list);
+        schoolsError.value = '';
+      } else {
+        schoolsError.value = '高校列表加载失败，请稍后重试';
+        debugPrint('[AuthController] loadSchools 返回非 200: ${response.data['message']}');
       }
-    } catch (_) {}
+    } catch (e) {
+      schoolsError.value = describeApiError(e, fallback: '高校列表加载失败，请检查网络后重试');
+      debugPrint('[AuthController] loadSchools error: $e');
+    }
   }
 
   /// 提交校园认证申请并发送验证码
@@ -259,24 +290,28 @@ class AuthController extends GetxController {
       });
 
       if (response.data['code'] == 200) {
-        Get.snackbar('验证码已发送', response.data['message'] ?? '验证码已发送至校园邮箱',
+        safeSnackbar('验证码已发送', response.data['message'] ?? '验证码已发送至校园邮箱',
             snackPosition: SnackPosition.BOTTOM,
             duration: const Duration(seconds: 4),
             backgroundColor: Colors.blue.withAlpha(40),
             colorText: Colors.blue[900]);
         return true;
       } else {
-        Get.snackbar('申请失败', response.data['message'] ?? '信息校验未通过',
+        safeSnackbar('申请失败', response.data['message'] ?? '信息校验未通过',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.red.withAlpha(40),
             colorText: Colors.red[900]);
         return false;
       }
     } on DioException catch (e) {
-      final msg = e.response?.data is Map
-          ? e.response?.data['message']
-          : (e.message ?? '网络请求失败');
-      Get.snackbar('申请异常', msg ?? '提交失败',
+      safeSnackbar('申请异常', describeApiError(e, fallback: '提交失败'),
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.red.withAlpha(40),
+          colorText: Colors.red[900]);
+      return false;
+    } catch (e, stack) {
+      debugPrint('[AuthController] submitVerify unexpected error: $e\n$stack');
+      safeSnackbar('申请异常', '提交失败，请稍后重试',
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
           colorText: Colors.red[900]);
@@ -297,24 +332,28 @@ class AuthController extends GetxController {
 
       if (response.data['code'] == 200) {
         await fetchProfile();
-        Get.snackbar('认证成功', '恭喜！您已成功通过校园学生身份认证',
+        safeSnackbar('认证成功', '恭喜！您已成功通过校园学生身份认证',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.green.withAlpha(40),
             colorText: Colors.green[900]);
-        Get.offNamed(AppRoutes.profile);
+        safeOffNamed(AppRoutes.profile);
         return true;
       } else {
-        Get.snackbar('核验失败', response.data['message'] ?? '验证码不正确',
+        safeSnackbar('核验失败', response.data['message'] ?? '验证码不正确',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.red.withAlpha(40),
             colorText: Colors.red[900]);
         return false;
       }
     } on DioException catch (e) {
-      final msg = e.response?.data is Map
-          ? e.response?.data['message']
-          : (e.message ?? '验证码核验失败');
-      Get.snackbar('核验异常', msg ?? '核验失败',
+      safeSnackbar('核验异常', describeApiError(e, fallback: '核验失败'),
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.red.withAlpha(40),
+          colorText: Colors.red[900]);
+      return false;
+    } catch (e, stack) {
+      debugPrint('[AuthController] verifyCode unexpected error: $e\n$stack');
+      safeSnackbar('核验异常', '核验失败，请稍后重试',
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
           colorText: Colors.red[900]);

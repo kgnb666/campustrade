@@ -30,7 +30,7 @@ class ReviewApi {
       debugPrint('[ReviewApi] createReview error: $e');
       return ApiResponse<ReviewModel>(
         code: 500,
-        message: '创建评价异常: $e',
+        message: '创建评价失败，请稍后重试',
         data: null,
       );
     }
@@ -61,7 +61,7 @@ class ReviewApi {
       debugPrint('[ReviewApi] getReviewsByUser error: $e');
       return ApiResponse<ReviewPageResult>(
         code: 500,
-        message: '获取用户评价异常: $e',
+        message: '用户评价加载失败，请稍后重试',
         data: null,
       );
     }
@@ -92,7 +92,7 @@ class ReviewApi {
       debugPrint('[ReviewApi] getReviewsByGoods error: $e');
       return ApiResponse<ReviewPageResult>(
         code: 500,
-        message: '获取商品评价异常: $e',
+        message: '商品评价加载失败，请稍后重试',
         data: null,
       );
     }
@@ -115,7 +115,7 @@ class ReviewApi {
       debugPrint('[ReviewApi] getOrderReviewStatus error: $e');
       return ApiResponse<OrderReviewStatusModel>(
         code: 500,
-        message: '获取订单评价状态异常: $e',
+        message: '评价状态加载失败，请稍后重试',
         data: null,
       );
     }
@@ -138,8 +138,18 @@ class ReviewApi {
       if (dataField != null && (code == 200 || code == 0)) {
         try {
           parsedData = dataParser(dataField);
-        } catch (e) {
-          debugPrint('[_parseApiResponse] dataParser failed: $e');
+        } catch (e, stack) {
+          // 解析失败不能静默：否则 code 仍是 200 而 data 为 null，
+          // 上层会把服务端的 'success' 当错误文案展示，问题被藏起来。
+          debugPrint('[_parseApiResponse] dataParser failed: $e\n$stack');
+          return ApiResponse<T>(
+            code: 500,
+            message: '数据解析失败，请稍后重试',
+            data: null,
+            timestamp: raw['timestamp'] is int
+                ? raw['timestamp'] as int
+                : int.tryParse(raw['timestamp']?.toString() ?? '0'),
+          );
         }
       }
 

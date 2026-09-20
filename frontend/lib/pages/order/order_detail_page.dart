@@ -6,6 +6,7 @@ import '../../controllers/order_controller.dart';
 import '../../controllers/review_controller.dart';
 import '../../models/order.dart';
 import '../../models/review.dart';
+import '../../utils/name_utils.dart';
 import '../review/create_review_sheet.dart';
 
 /// 订单详情浏览页面
@@ -155,9 +156,12 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     final auth =
         Get.isRegistered<AuthController>() ? Get.find<AuthController>() : null;
     final currentUserId = auth?.currentUser.value?.id;
-    final isSeller = order.sellerId == currentUserId ||
-        (currentUserId != null && order.seller?.id == currentUserId) ||
-        _orderController.currentRole.value == 'SELLER';
+    // 身份只依据服务端返回的 buyerId/sellerId 与当前登录用户比较。
+    // 绝不引入 _orderController.currentRole（那是订单列表页的标签页选项，跨页面共享），
+    // 否则买家在"我的卖出"标签下返回后打开自己的买家订单，会被误判成卖家并看到
+    // "确认接单/去评价"这类卖家操作。
+    final isSeller = currentUserId != null &&
+        (order.sellerId == currentUserId || order.seller?.id == currentUserId);
 
     // 未知状态：只读展示，不渲染任何操作按钮
     // （服务端不认得的流转，前端更不能给出口子；已知状态的判定全部来自枚举）
@@ -374,77 +378,35 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   }
 
   /// 取消订单弹窗 (必须填写 cancelReason)
+  ///
+  /// 输入控制器由弹窗自身的 State 持有并 dispose（原先在弹窗外创建且从不释放）。
   void _showCancelOrderDialog(BuildContext context, OrderVO order) {
-    final reasonController = TextEditingController();
-
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('取消订单'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '取消订单后将释放商品锁定，该操作不可逆。请输入取消原因：',
-              style: TextStyle(fontSize: 13, color: Colors.black87),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: reasonController,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                labelText: '取消原因 (必填)',
-                hintText: '如：面交时间冲突、双方协商一致取消等',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('暂不取消'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red.shade700,
-              foregroundColor: Colors.white,
-            ),
-            onPressed: () async {
-              final reason = reasonController.text.trim();
-              if (reason.isEmpty) {
-                Get.snackbar(
-                  '提示',
-                  '取消原因不能为空，请填写具体原因',
-                  snackPosition: SnackPosition.BOTTOM,
-                );
-                return;
-              }
-              Navigator.pop(ctx);
-              final success =
-                  await _orderController.cancelOrder(order.id, reason);
-              if (success) {
-                Get.snackbar(
-                  '订单已取消',
-                  '订单已成功终止并已更新流转状态',
-                  snackPosition: SnackPosition.BOTTOM,
-                );
-              } else {
-                Get.snackbar(
-                  '取消失败',
-                  _orderController.errorMessage.value.isNotEmpty
-                      ? _orderController.errorMessage.value
-                      : '取消订单失败，请稍后重试',
-                  snackPosition: SnackPosition.BOTTOM,
-                );
-              }
-            },
-            child: const Text('确认取消'),
-          ),
-        ],
+      builder: (ctx) => _CancelOrderDialog(
+        onSubmit: (reason) => _handleCancelOrder(order, reason),
       ),
     );
+  }
+
+  /// 执行取消订单并给出结果提示（供取消弹窗回调）
+  Future<void> _handleCancelOrder(OrderVO order, String reason) async {
+    final success = await _orderController.cancelOrder(order.id, reason);
+    if (success) {
+      Get.snackbar(
+        '订单已取消',
+        '订单已成功终止并已更新流转状态',
+        snackPosition: SnackPosition.BOTTOM,
+      );
+    } else {
+      Get.snackbar(
+        '取消失败',
+        _orderController.errorMessage.value.isNotEmpty
+            ? _orderController.errorMessage.value
+            : '取消订单失败，请稍后重试',
+        snackPosition: SnackPosition.BOTTOM,
+      );
+    }
   }
 
   /// 状态时间线卡片
@@ -1254,9 +1216,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       final auth =
           Get.isRegistered<AuthController>() ? Get.find<AuthController>() : null;
       final currentUserId = auth?.currentUser.value?.id;
-      final isSeller = order.sellerId == currentUserId ||
-          (currentUserId != null && order.seller?.id == currentUserId) ||
-          _orderController.currentRole.value == 'SELLER';
+      // 同上：只按服务端的 buyerId/sellerId 判定，不看列表页的标签页选择
+      final isSeller = currentUserId != null &&
+          (order.sellerId == currentUserId || order.seller?.id == currentUserId);
 
       return Card(
         elevation: 1,
@@ -1451,7 +1413,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                       : null,
                   child: review.displayAvatar == null
                       ? Text(
-                          review.displayNickname.substring(0, 1),
+                          initialOf(review.displayNickname, '用户'),
                           style: const TextStyle(fontSize: 11),
                         )
                       : null,
@@ -1545,6 +1507,86 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           ],
         ],
       ),
+    );
+  }
+}
+
+/// 取消订单弹窗（独立 StatefulWidget）
+///
+/// 输入控制器由弹窗自身持有并在 [State.dispose] 释放；提交时先取值再关闭弹窗，
+/// 保证异步回调执行时控制器仍未被销毁。视觉与交互与改造前一致。
+class _CancelOrderDialog extends StatefulWidget {
+  const _CancelOrderDialog({required this.onSubmit});
+
+  /// 原因校验通过且弹窗关闭后回调（异步执行取消接口）
+  final Future<void> Function(String reason) onSubmit;
+
+  @override
+  State<_CancelOrderDialog> createState() => _CancelOrderDialogState();
+}
+
+class _CancelOrderDialogState extends State<_CancelOrderDialog> {
+  final TextEditingController _reasonController = TextEditingController();
+
+  @override
+  void dispose() {
+    _reasonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _confirm() async {
+    final reason = _reasonController.text.trim();
+    if (reason.isEmpty) {
+      Get.snackbar(
+        '提示',
+        '取消原因不能为空，请填写具体原因',
+        snackPosition: SnackPosition.BOTTOM,
+      );
+      return;
+    }
+    if (!mounted) return;
+    Navigator.pop(context);
+    await widget.onSubmit(reason);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('取消订单'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '取消订单后将释放商品锁定，该操作不可逆。请输入取消原因：',
+            style: TextStyle(fontSize: 13, color: Colors.black87),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: _reasonController,
+            maxLines: 3,
+            decoration: const InputDecoration(
+              labelText: '取消原因 (必填)',
+              hintText: '如：面交时间冲突、双方协商一致取消等',
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('暂不取消'),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.red.shade700,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: _confirm,
+          child: const Text('确认取消'),
+        ),
+      ],
     );
   }
 }

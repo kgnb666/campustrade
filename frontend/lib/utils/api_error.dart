@@ -17,6 +17,12 @@ String describeApiError(
   const String defaultFallback = '操作失败，请稍后重试';
   final String base = fallback ?? defaultFallback;
 
+  // 服务层抛出的统一异常：message 已经是给人看的中文文案，直接返回
+  if (error is ApiException) {
+    final String message = error.message.trim();
+    return message.isEmpty ? base : message;
+  }
+
   if (error is DioException) {
     // 1. 服务端业务提示优先（响应体结构与成功时一致：{code,message,data,timestamp}）
     final dynamic data = error.response?.data;
@@ -57,4 +63,48 @@ String describeApiError(
   }
   message = message.trim();
   return message.isEmpty ? base : message;
+}
+
+/// 服务层对外的统一异常类型。
+///
+/// 为什么需要它：原先服务层 `catch (e) { return []; }` 把"断网/超时/401"与
+/// "后端确实没有数据"折叠成同一个空集合，UI 只能显示空态，用户以为数据被删了。
+/// 现在服务层把失败一律转成 [ApiException] 抛出，控制器据此把 `errorMessage`
+/// 与空数据区分开：`errorMessage` 非空 => 错误态 + 重试；为空且列表为空 => 真正的空态。
+///
+/// message 永远是可直接展示给用户的中文文案（由 [describeApiError] 产出），
+/// 排障细节通过 [cause] 保留在日志里，不再拼进用户可见文本。
+class ApiException implements Exception {
+  ApiException(this.message, {this.statusCode, this.cause});
+
+  /// 把任意底层异常（DioException / 解析异常 / 业务异常）归一为 [ApiException]。
+  ///
+  /// - 已是 [ApiException] 时原样返回，避免重复包装丢失原始信息。
+  /// - 文案走 [describeApiError]，保证"服务端 message 优先"的既有约定不退化。
+  factory ApiException.from(
+    Object error, {
+    String? fallback,
+    int? statusCode,
+    String? timeoutMessage,
+  }) {
+    if (error is ApiException) return error;
+    return ApiException(
+      describeApiError(error, fallback: fallback, timeoutMessage: timeoutMessage),
+      statusCode: statusCode ??
+          (error is DioException ? error.response?.statusCode : null),
+      cause: error,
+    );
+  }
+
+  /// 可直接展示给用户的中文文案。
+  final String message;
+
+  /// 对应的 HTTP 状态码（能拿到时），供上层做 401/404 之类的分支判断。
+  final int? statusCode;
+
+  /// 原始异常，仅用于日志/排障。
+  final Object? cause;
+
+  @override
+  String toString() => message.isEmpty ? 'ApiException' : message;
 }

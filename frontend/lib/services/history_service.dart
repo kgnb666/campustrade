@@ -2,11 +2,24 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import '../api/dio_client.dart';
 import '../models/history_model.dart';
+import '../utils/api_error.dart';
 import '../utils/json_cast.dart';
 
 /// 浏览足迹网络服务
+///
+/// 错误处理约定与 [GoodsService] 一致：失败一律抛 [ApiException]（message 为中文文案），
+/// 不再把失败折叠成空列表，"足迹被清空"与"加载失败"因此在 UI 上可分。
 class HistoryService {
   final Dio _dio = DioClient().dio;
+
+  String _serverMessage(Response<dynamic> response, String fallback) {
+    final dynamic data = response.data;
+    if (data is Map) {
+      final String message = (data['message'] ?? '').toString().trim();
+      if (message.isNotEmpty) return message;
+    }
+    return fallback;
+  }
 
   /// 分页获取我的浏览历史
   Future<Map<String, dynamic>> getHistoryList({int page = 1, int size = 20}) async {
@@ -28,10 +41,13 @@ class HistoryService {
           'pages': asInt(data['pages'], 1),
         };
       }
-      return {'items': <HistoryItemModel>[], 'total': 0, 'current': 1, 'pages': 1};
+      throw ApiException(
+        _serverMessage(response, '浏览足迹加载失败'),
+        statusCode: response.statusCode,
+      );
     } catch (e) {
-      debugPrint('[HistoryService] getHistoryList error: $e');
-      return {'items': <HistoryItemModel>[], 'total': 0, 'current': 1, 'pages': 1};
+      debugPrint('[HistoryService] getHistoryList page=$page error: $e');
+      throw ApiException.from(e, fallback: '浏览足迹加载失败');
     }
   }
 }

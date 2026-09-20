@@ -4,69 +4,14 @@ import '../../controllers/auth_controller.dart';
 import '../../controllers/review_controller.dart';
 import '../../routes/app_routes.dart';
 import '../../models/status_enums.dart';
+import '../../utils/name_utils.dart';
 
 /// 个人中心页面
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
 
   void _showEditProfileDialog(BuildContext context, AuthController authController) {
-    final user = authController.currentUser.value;
-    final nicknameController = TextEditingController(text: user?.nickname ?? '');
-    final avatarController = TextEditingController(text: user?.avatar ?? '');
-    final phoneController = TextEditingController(text: user?.phone ?? '');
-
-    Get.dialog(
-      AlertDialog(
-        title: const Text('修改个人资料'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nicknameController,
-                decoration: const InputDecoration(
-                  labelText: '个性昵称',
-                  hintText: '展示在商品与个人主页',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: avatarController,
-                decoration: const InputDecoration(
-                  labelText: '头像图片链接',
-                  hintText: '输入 HTTP/HTTPS 图片 URL',
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: phoneController,
-                decoration: const InputDecoration(
-                  labelText: '联系电话',
-                  hintText: '用于线下自提电话联系',
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Get.back(),
-            child: const Text('取消'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Get.back();
-              await authController.updateProfile(
-                nickname: nicknameController.text,
-                avatar: avatarController.text,
-                phone: phoneController.text,
-              );
-            },
-            child: const Text('保存'),
-          ),
-        ],
-      ),
-    );
+    Get.dialog(_EditProfileDialog(authController: authController));
   }
 
   @override
@@ -143,7 +88,7 @@ class ProfilePage extends StatelessWidget {
                                 : null,
                             child: user.avatar == null || user.avatar!.isEmpty
                                 ? Text(
-                                    (user.nickname ?? user.username).substring(0, 1).toUpperCase(),
+                                    initialOf(user.nickname, user.username),
                                     style: TextStyle(
                                       fontSize: 28,
                                       fontWeight: FontWeight.bold,
@@ -161,7 +106,7 @@ class ProfilePage extends StatelessWidget {
                                   children: [
                                     Flexible(
                                       child: Text(
-                                        user.nickname ?? user.username,
+                                        displayNameOf(user.nickname, user.username),
                                         style: theme.textTheme.titleLarge?.copyWith(
                                           fontWeight: FontWeight.bold,
                                         ),
@@ -714,6 +659,105 @@ class ProfilePage extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 修改个人资料弹窗（独立 StatefulWidget）
+///
+/// 为什么必须是 StatefulWidget：三个 [TextEditingController] 原先在弹窗外部创建、
+/// 从不 dispose，弹窗被关闭后控制器仍然挂在 Element 树上（反复打开会持续泄漏）。
+/// 放进弹窗自己的 State 里，[State.dispose] 才能与弹窗生命周期严格对齐。
+/// 视觉与交互与改造前完全一致（同样的字段、同样的取消/保存按钮语义）。
+class _EditProfileDialog extends StatefulWidget {
+  const _EditProfileDialog({required this.authController});
+
+  final AuthController authController;
+
+  @override
+  State<_EditProfileDialog> createState() => _EditProfileDialogState();
+}
+
+class _EditProfileDialogState extends State<_EditProfileDialog> {
+  late final TextEditingController _nicknameController;
+  late final TextEditingController _avatarController;
+  late final TextEditingController _phoneController;
+
+  @override
+  void initState() {
+    super.initState();
+    final user = widget.authController.currentUser.value;
+    _nicknameController = TextEditingController(text: user?.nickname ?? '');
+    _avatarController = TextEditingController(text: user?.avatar ?? '');
+    _phoneController = TextEditingController(text: user?.phone ?? '');
+  }
+
+  @override
+  void dispose() {
+    _nicknameController.dispose();
+    _avatarController.dispose();
+    _phoneController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    // 先取值再关闭弹窗：控制器随即被 dispose，不能再读 .text
+    final nickname = _nicknameController.text;
+    final avatar = _avatarController.text;
+    final phone = _phoneController.text;
+
+    Get.back();
+    await widget.authController.updateProfile(
+      nickname: nickname,
+      avatar: avatar,
+      phone: phone,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('修改个人资料'),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: _nicknameController,
+              decoration: const InputDecoration(
+                labelText: '个性昵称',
+                hintText: '展示在商品与个人主页',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _avatarController,
+              decoration: const InputDecoration(
+                labelText: '头像图片链接',
+                hintText: '输入 HTTP/HTTPS 图片 URL',
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _phoneController,
+              decoration: const InputDecoration(
+                labelText: '联系电话',
+                hintText: '用于线下自提电话联系',
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Get.back(),
+          child: const Text('取消'),
+        ),
+        ElevatedButton(
+          onPressed: _save,
+          child: const Text('保存'),
+        ),
+      ],
     );
   }
 }

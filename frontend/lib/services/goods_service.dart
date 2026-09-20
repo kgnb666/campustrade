@@ -3,11 +3,28 @@ import 'package:flutter/foundation.dart';
 import '../api/dio_client.dart';
 import '../models/category_model.dart';
 import '../models/goods_model.dart';
+import '../utils/api_error.dart';
 import '../utils/json_cast.dart';
 
 /// 商品业务接口网络服务
+///
+/// 错误处理约定（与阶段 6 的"错误态与空态必须可分"一致）：
+/// 服务层**不再**把异常吞掉返回空集合/ null，而是统一抛出 [ApiException]，
+/// 由控制器区分"请求失败(errorMessage 非空)"与"确实没有数据(空列表)"。
+/// [ApiException.message] 已是可直接展示的中文文案。
 class GoodsService {
   final Dio _dio = DioClient().dio;
+
+  /// 安全取出服务端业务提示（响应体结构：{code,message,data,timestamp}），
+  /// 拿不到时回退为调用方给的中文兜底文案。
+  String _serverMessage(Response<dynamic> response, String fallback) {
+    final dynamic data = response.data;
+    if (data is Map) {
+      final String message = (data['message'] ?? '').toString().trim();
+      if (message.isNotEmpty) return message;
+    }
+    return fallback;
+  }
 
   /// 获取商品树形分类列表
   Future<List<CategoryModel>> getCategories() async {
@@ -19,10 +36,13 @@ class GoodsService {
             .map((e) => CategoryModel.fromJson(e as Map<String, dynamic>))
             .toList();
       }
-      return [];
+      throw ApiException(
+        _serverMessage(response, '分类加载失败'),
+        statusCode: response.statusCode,
+      );
     } catch (e) {
       debugPrint('[GoodsService] getCategories error: $e');
-      return [];
+      throw ApiException.from(e, fallback: '分类加载失败');
     }
   }
 
@@ -37,52 +57,68 @@ class GoodsService {
     double? maxPrice,
     String? conditionLevel,
   }) async {
-    try {
-      final Map<String, dynamic> queryParams = {
-        'page': page,
-        'size': size,
-      };
-      if (keyword != null && keyword.isNotEmpty) queryParams['keyword'] = keyword;
-      if (categoryId != null) queryParams['categoryId'] = categoryId;
-      if (schoolId != null) queryParams['schoolId'] = schoolId;
-      if (minPrice != null) queryParams['minPrice'] = minPrice;
-      if (maxPrice != null) queryParams['maxPrice'] = maxPrice;
-      if (conditionLevel != null && conditionLevel.isNotEmpty) {
-        queryParams['conditionLevel'] = conditionLevel;
-      }
+    final Map<String, dynamic> queryParams = {
+      'page': page,
+      'size': size,
+    };
+    if (keyword != null && keyword.isNotEmpty) queryParams['keyword'] = keyword;
+    if (categoryId != null) queryParams['categoryId'] = categoryId;
+    if (schoolId != null) queryParams['schoolId'] = schoolId;
+    if (minPrice != null) queryParams['minPrice'] = minPrice;
+    if (maxPrice != null) queryParams['maxPrice'] = maxPrice;
+    if (conditionLevel != null && conditionLevel.isNotEmpty) {
+      queryParams['conditionLevel'] = conditionLevel;
+    }
 
+    try {
       final response = await _dio.get('/goods/list', queryParameters: queryParams);
-      if (response.statusCode == 200 && response.data['code'] == 200) {
-        final data = response.data['data'];
-        final recordsJson = data['records'] as List<dynamic>? ?? [];
-        final items = recordsJson
-            .map((e) => GoodsItemModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-        return {
-          'items': items,
-          'total': asInt(data['total']),
-          'current': asInt(data['current'], 1),
-          'pages': asInt(data['pages'], 1),
-        };
-      }
-      return {'items': <GoodsItemModel>[], 'total': 0, 'current': 1, 'pages': 1};
+      return _parseGoodsPage(response);
     } catch (e) {
-      debugPrint('[GoodsService] getGoodsList error: $e');
-      return {'items': <GoodsItemModel>[], 'total': 0, 'current': 1, 'pages': 1};
+      debugPrint('[GoodsService] getGoodsList page=$page error: $e');
+      throw ApiException.from(e, fallback: '商品列表加载失败');
     }
   }
 
+  /// 解析分页响应：非 200 一律抛异常，绝不把失败当空列表返回
+  Map<String, dynamic> _parseGoodsPage(Response<dynamic> response) {
+    if (response.statusCode == 200 && response.data['code'] == 200) {
+      final data = response.data['data'];
+      final recordsJson = data['records'] as List<dynamic>? ?? [];
+      final items = recordsJson
+          .map((e) => GoodsItemModel.fromJson(e as Map<String, dynamic>))
+          .toList();
+      return {
+        'items': items,
+        'total': asInt(data['total']),
+        'current': asInt(data['current'], 1),
+        'pages': asInt(data['pages'], 1),
+      };
+    }
+    throw ApiException(
+      _serverMessage(response, '商品列表加载失败'),
+      statusCode: response.statusCode,
+    );
+  }
+
   /// 获取商品详情
+  ///
+  /// 返回 null 仅表示"服务端成功响应但没有数据"，请求失败一律抛 [ApiException]，
+  /// 调用方才能把"网络断了"和"商品真的不存在"分开提示。
   Future<GoodsDetailModel?> getGoodsDetail(String id) async {
     try {
       final response = await _dio.get('/goods/$id');
       if (response.statusCode == 200 && response.data['code'] == 200) {
-        return GoodsDetailModel.fromJson(response.data['data']);
+        final data = response.data['data'];
+        if (data == null) return null;
+        return GoodsDetailModel.fromJson(data);
       }
-      return null;
+      throw ApiException(
+        _serverMessage(response, '商品详情加载失败'),
+        statusCode: response.statusCode,
+      );
     } catch (e) {
-      debugPrint('[GoodsService] getGoodsDetail error: $e');
-      return null;
+      debugPrint('[GoodsService] getGoodsDetail id=$id error: $e');
+      throw ApiException.from(e, fallback: '商品详情加载失败');
     }
   }
 
@@ -90,38 +126,69 @@ class GoodsService {
   ///
   /// 返回 String：后端把 Long 型 ID 序列化为字符串，用 int 承载会在 Web 上丢精度（也会直接抛类型异常）。
   Future<String> createGoods(Map<String, dynamic> data) async {
-    final response = await _dio.post('/goods', data: data);
-    if (response.statusCode == 200 && response.data['code'] == 200) {
-      return response.data['data']?.toString() ?? '';
-    } else {
-      throw Exception(response.data['message'] ?? '发布商品失败');
+    try {
+      final response = await _dio.post('/goods', data: data);
+      if (response.statusCode == 200 && response.data['code'] == 200) {
+        return response.data['data']?.toString() ?? '';
+      }
+      throw ApiException(
+        _serverMessage(response, '发布商品失败'),
+        statusCode: response.statusCode,
+      );
+    } catch (e) {
+      debugPrint('[GoodsService] createGoods error: $e');
+      throw ApiException.from(e, fallback: '发布商品失败');
     }
   }
 
   /// 修改商品
   Future<void> updateGoods(String id, Map<String, dynamic> data) async {
-    final response = await _dio.put('/goods/$id', data: data);
-    if (response.statusCode != 200 || response.data['code'] != 200) {
-      throw Exception(response.data['message'] ?? '修改商品失败');
+    try {
+      final response = await _dio.put('/goods/$id', data: data);
+      if (response.statusCode != 200 || response.data['code'] != 200) {
+        throw ApiException(
+        _serverMessage(response, '修改商品失败'),
+        statusCode: response.statusCode,
+      );
+      }
+    } catch (e) {
+      debugPrint('[GoodsService] updateGoods id=$id error: $e');
+      throw ApiException.from(e, fallback: '修改商品失败');
     }
   }
 
   /// 逻辑删除商品
   Future<void> deleteGoods(String id) async {
-    final response = await _dio.delete('/goods/$id');
-    if (response.statusCode != 200 || response.data['code'] != 200) {
-      throw Exception(response.data['message'] ?? '删除商品失败');
+    try {
+      final response = await _dio.delete('/goods/$id');
+      if (response.statusCode != 200 || response.data['code'] != 200) {
+        throw ApiException(
+        _serverMessage(response, '删除商品失败'),
+        statusCode: response.statusCode,
+      );
+      }
+    } catch (e) {
+      debugPrint('[GoodsService] deleteGoods id=$id error: $e');
+      throw ApiException.from(e, fallback: '删除商品失败');
     }
   }
 
   /// 修改商品状态 (ON_SALE / OFF_SHELF)
   Future<void> updateGoodsStatus(String id, String status) async {
-    final response = await _dio.put(
-      '/goods/$id/status',
-      data: {'status': status},
-    );
-    if (response.statusCode != 200 || response.data['code'] != 200) {
-      throw Exception(response.data['message'] ?? '更新状态失败');
+    try {
+      final response = await _dio.put(
+        '/goods/$id/status',
+        data: {'status': status},
+      );
+      if (response.statusCode != 200 || response.data['code'] != 200) {
+        throw ApiException(
+        _serverMessage(response, '更新状态失败'),
+        statusCode: response.statusCode,
+      );
+      }
+    } catch (e) {
+      debugPrint('[GoodsService] updateGoodsStatus id=$id error: $e');
+      throw ApiException.from(e, fallback: '更新状态失败');
     }
   }
 
@@ -135,10 +202,13 @@ class GoodsService {
             .map((e) => GoodsItemModel.fromJson(e as Map<String, dynamic>))
             .toList();
       }
-      return [];
+      throw ApiException(
+        _serverMessage(response, '我的商品加载失败'),
+        statusCode: response.statusCode,
+      );
     } catch (e) {
       debugPrint('[GoodsService] getMyGoods error: $e');
-      return [];
+      throw ApiException.from(e, fallback: '我的商品加载失败');
     }
   }
 
@@ -153,36 +223,23 @@ class GoodsService {
     int page = 1,
     int size = 10,
   }) async {
-    try {
-      final Map<String, dynamic> queryParams = {
-        'page': page,
-        'size': size,
-      };
-      if (keyword != null && keyword.trim().isNotEmpty) queryParams['keyword'] = keyword.trim();
-      if (categoryId != null) queryParams['categoryId'] = categoryId;
-      if (schoolId != null) queryParams['schoolId'] = schoolId;
-      if (minPrice != null) queryParams['minPrice'] = minPrice;
-      if (maxPrice != null) queryParams['maxPrice'] = maxPrice;
-      if (sort != null && sort.isNotEmpty) queryParams['sort'] = sort;
+    final Map<String, dynamic> queryParams = {
+      'page': page,
+      'size': size,
+    };
+    if (keyword != null && keyword.trim().isNotEmpty) queryParams['keyword'] = keyword.trim();
+    if (categoryId != null) queryParams['categoryId'] = categoryId;
+    if (schoolId != null) queryParams['schoolId'] = schoolId;
+    if (minPrice != null) queryParams['minPrice'] = minPrice;
+    if (maxPrice != null) queryParams['maxPrice'] = maxPrice;
+    if (sort != null && sort.isNotEmpty) queryParams['sort'] = sort;
 
+    try {
       final response = await _dio.get('/goods/search', queryParameters: queryParams);
-      if (response.statusCode == 200 && response.data['code'] == 200) {
-        final data = response.data['data'];
-        final recordsJson = data['records'] as List<dynamic>? ?? [];
-        final items = recordsJson
-            .map((e) => GoodsItemModel.fromJson(e as Map<String, dynamic>))
-            .toList();
-        return {
-          'items': items,
-          'total': asInt(data['total']),
-          'current': asInt(data['current'], 1),
-          'pages': asInt(data['pages'], 1),
-        };
-      }
-      return {'items': <GoodsItemModel>[], 'total': 0, 'current': 1, 'pages': 1};
+      return _parseGoodsPage(response);
     } catch (e) {
-      debugPrint('[GoodsService] searchGoods error: $e');
-      return {'items': <GoodsItemModel>[], 'total': 0, 'current': 1, 'pages': 1};
+      debugPrint('[GoodsService] searchGoods page=$page error: $e');
+      throw ApiException.from(e, fallback: '搜索商品失败');
     }
   }
 
@@ -195,11 +252,15 @@ class GoodsService {
         if (raw is List) {
           return raw.map((e) => e.toString()).toList();
         }
+        return <String>[];
       }
-      return [];
+      throw ApiException(
+        _serverMessage(response, '热搜加载失败'),
+        statusCode: response.statusCode,
+      );
     } catch (e) {
       debugPrint('[GoodsService] getHotSearches error: $e');
-      return [];
+      throw ApiException.from(e, fallback: '热搜加载失败');
     }
   }
 
@@ -212,11 +273,15 @@ class GoodsService {
         if (raw is List) {
           return raw.map((e) => e.toString()).toList();
         }
+        return <String>[];
       }
-      return [];
+      throw ApiException(
+        _serverMessage(response, '搜索历史加载失败'),
+        statusCode: response.statusCode,
+      );
     } catch (e) {
       debugPrint('[GoodsService] getSearchHistory error: $e');
-      return [];
+      throw ApiException.from(e, fallback: '搜索历史加载失败');
     }
   }
 
@@ -226,11 +291,18 @@ class GoodsService {
       'file': MultipartFile.fromBytes(bytes, filename: filename),
     });
 
-    final response = await _dio.post('/file/upload', data: formData);
-    if (response.statusCode == 200 && response.data['code'] == 200) {
-      return response.data['data'] as String;
-    } else {
-      throw Exception(response.data['message'] ?? '图片上传失败');
+    try {
+      final response = await _dio.post('/file/upload', data: formData);
+      if (response.statusCode == 200 && response.data['code'] == 200) {
+        return response.data['data'] as String;
+      }
+      throw ApiException(
+        _serverMessage(response, '图片上传失败'),
+        statusCode: response.statusCode,
+      );
+    } catch (e) {
+      debugPrint('[GoodsService] uploadImageBytes file=$filename error: $e');
+      throw ApiException.from(e, fallback: '图片上传失败');
     }
   }
 }

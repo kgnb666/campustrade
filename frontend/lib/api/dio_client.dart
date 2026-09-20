@@ -26,7 +26,7 @@ class DioClient {
   Completer<bool>? _refreshCompleter;
 
   /// 会话过期处理去重标记：避免一次刷新失败触发多个并发 401 时重复弹窗。
-  /// 刷新成功时复位，确保后续真实过期可再次正常提示。
+  /// 刷新成功时复位，**登录成功时也必须复位**（见 [markSessionRestored]）。
   bool _sessionExpiredHandled = false;
 
   /// 重放请求防无限循环标记键（写入 RequestOptions.extra）。
@@ -96,7 +96,11 @@ class DioClient {
                 return handler.resolve(retryResponse);
               } on DioException catch (retryErr) {
                 return handler.next(retryErr);
-              } catch (_) {
+              } catch (retryUnknown, retryStack) {
+                // 重放失败但非 DioException（解析/拦截器异常）：记录后回传原 401
+                if (kDebugMode) {
+                  debugPrint('[DioClient] 刷新后重放请求失败: $retryUnknown\n$retryStack');
+                }
                 return handler.next(e);
               }
             } else {
@@ -198,21 +202,22 @@ class DioClient {
   }
 
   /// 刷新彻底失败时：清空本地全部凭据并优雅跳转登录页。
+  ///
+  /// 处理动作全部委托给 [AuthController.handleSessionExpired]（单一落点）：
+  /// 它负责清空 storage、清空内存态、提示并跳转登录。这里只保留"未注册
+  /// AuthController"（如单元测试直接驱动 Dio 的场景）下的兜底清理。
   Future<void> _forceLogoutAndClear() async {
     // 同一次会话过期仅处理一次，避免并发 401 重复弹窗
     if (_sessionExpiredHandled) return;
     _sessionExpiredHandled = true;
 
+    if (getx.Get.isRegistered<AuthController>()) {
+      await getx.Get.find<AuthController>().handleSessionExpired();
+      return;
+    }
+
     final storage = _resolveStorage();
     await storage?.clearAll();
-
-    // 同步清空 AuthController 内存态，保证 UI 立即反映登出
-    if (getx.Get.isRegistered<AuthController>()) {
-      final auth = getx.Get.find<AuthController>();
-      auth.token.value = '';
-      auth.isLoggedIn.value = false;
-      auth.currentUser.value = null;
-    }
 
     try {
       if (getx.Get.context != null) {
@@ -223,7 +228,12 @@ class DioClient {
           snackPosition: getx.SnackPosition.TOP,
         );
       }
-    } catch (_) {}
+    } catch (e, stack) {
+      // 跳转失败（例如测试环境没有 Navigator）不应吞掉：记录以便排障
+      if (kDebugMode) {
+        debugPrint('[DioClient] 会话过期跳转登录失败: $e\n$stack');
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -233,6 +243,15 @@ class DioClient {
   /// 可在单元测试中注入自定义的 refreshDio
   @visibleForTesting
   Dio? customRefreshDio;
+
+  /// 复位"本次会话已过期并处理过"的标记。
+  ///
+  /// 必须在**登录成功后**调用：该标记的语义是"当前这轮会话已经过期并处理完毕"，
+  /// 用户重新登录即进入全新会话，若不复位，同一进程内第二次会话过期会被静默忽略
+  /// （不清 storage、不跳登录、不提示），用户会停在"看似已登录但请求全 401"的状态。
+  void markSessionRestored() {
+    _sessionExpiredHandled = false;
+  }
 
   /// 复位会话与刷新锁状态（在用户登出或自动化测试重置时调用）
   void resetSessionState() {

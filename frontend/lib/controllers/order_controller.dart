@@ -2,9 +2,16 @@ import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import '../api/order_api.dart';
 import '../models/order.dart';
+import '../utils/api_error.dart';
 
 /// 订单模块状态控制器 (GetX)
 /// 负责管理我的订单列表、订单详情、流转操作以及响应式 loading/error 状态
+///
+/// 阶段 6 起列表分页遵守统一约定：
+/// - 每次请求带自增 requestId，响应回来若已不是最新请求则整份丢弃
+///   （避免"下拉刷新 + 上拉加载"并发时出现"新列表 + 旧页追加"的重复/错序）；
+/// - 加载更多失败回滚页码，否则下一次上拉会永久跳过该页；
+/// - 控制器关闭后丢弃所有迟到写入。
 class OrderController extends GetxController {
   final OrderApi _orderApi;
 
@@ -36,6 +43,20 @@ class OrderController extends GetxController {
 
   /// 当前状态过滤 (null 表示全部状态)
   final Rxn<OrderStatus> currentStatusFilter = Rxn<OrderStatus>();
+
+  /// 列表请求序号：用于作废在途的旧响应
+  int _listRequestSeq = 0;
+
+  /// 控制器是否已关闭（关闭后丢弃迟到响应）
+  bool _closed = false;
+
+  @override
+  void onClose() {
+    _closed = true;
+    super.onClose();
+  }
+
+  bool _isStale(int requestId) => _closed || requestId != _listRequestSeq;
 
   /// 是否存在错误
   bool get hasError => errorMessage.isNotEmpty;
@@ -79,15 +100,22 @@ class OrderController extends GetxController {
       resetError();
     }
 
+    // 自增序号：刷新会作废所有在途的 loadMore 响应
+    final int requestId = ++_listRequestSeq;
+    final int page = currentPage.value;
+
     try {
       final res = await _orderApi.getMyOrders(
         role: currentRole.value,
         status: currentStatusFilter.value?.code,
-        page: currentPage.value,
+        page: page,
         size: 10,
       );
 
+      if (_isStale(requestId)) return;
+
       if (res.isSuccess && res.data != null) {
+        errorMessage.value = '';
         final pageData = res.data!;
         if (refresh) {
           orders.assignAll(pageData.records);
@@ -95,18 +123,23 @@ class OrderController extends GetxController {
           orders.addAll(pageData.records);
         }
 
-        if (currentPage.value >= pageData.pages || pageData.records.isEmpty) {
+        if (page >= pageData.pages || pageData.records.isEmpty) {
           hasMore.value = false;
         }
       } else {
         errorMessage.value = res.message;
+        if (!refresh) currentPage.value = page - 1; // 失败回滚页码
       }
-    } catch (e) {
-      debugPrint('[OrderController] fetchMyOrders error: $e');
-      errorMessage.value = '加载订单失败: $e';
+    } catch (e, stack) {
+      if (_isStale(requestId)) return;
+      debugPrint('[OrderController] fetchMyOrders page=$page error: $e\n$stack');
+      errorMessage.value = describeApiError(e, fallback: '加载订单失败');
+      if (!refresh) currentPage.value = page - 1; // 失败回滚页码
     } finally {
-      loading.value = false;
-      isMoreLoading.value = false;
+      if (!_isStale(requestId)) {
+        loading.value = false;
+        isMoreLoading.value = false;
+      }
     }
   }
 
@@ -125,6 +158,7 @@ class OrderController extends GetxController {
 
     try {
       final res = await _orderApi.getOrderDetail(id);
+      if (_closed) return null; // 控制器已关闭：丢弃迟到响应
       if (res.isSuccess && res.data != null) {
         currentOrder.value = res.data;
         _syncOrderInList(res.data!);
@@ -133,9 +167,9 @@ class OrderController extends GetxController {
         errorMessage.value = res.message;
         return null;
       }
-    } catch (e) {
-      debugPrint('[OrderController] fetchOrderDetail error: $e');
-      errorMessage.value = '获取订单详情失败: $e';
+    } catch (e, stack) {
+      debugPrint('[OrderController] fetchOrderDetail error: $e\n$stack');
+      errorMessage.value = describeApiError(e, fallback: '获取订单详情失败');
       return null;
     } finally {
       loading.value = false;
@@ -157,6 +191,7 @@ class OrderController extends GetxController {
         meetLocation: meetLocation,
         buyerMessage: buyerMessage,
       );
+      if (_closed) return null; // 控制器已关闭：丢弃迟到响应
 
       if (res.isSuccess && res.data != null) {
         final newOrder = res.data!;
@@ -169,9 +204,9 @@ class OrderController extends GetxController {
         errorMessage.value = res.message;
         return null;
       }
-    } catch (e) {
-      debugPrint('[OrderController] createOrder error: $e');
-      errorMessage.value = '创建订单失败: $e';
+    } catch (e, stack) {
+      debugPrint('[OrderController] createOrder error: $e\n$stack');
+      errorMessage.value = describeApiError(e, fallback: '创建订单失败');
       return null;
     } finally {
       loading.value = false;
@@ -185,6 +220,7 @@ class OrderController extends GetxController {
 
     try {
       final res = await _orderApi.confirmOrder(id);
+      if (_closed) return false; // 控制器已关闭：丢弃迟到响应
       if (res.isSuccess && res.data != null) {
         final updated = res.data!;
         currentOrder.value = updated;
@@ -194,9 +230,9 @@ class OrderController extends GetxController {
         errorMessage.value = res.message;
         return false;
       }
-    } catch (e) {
-      debugPrint('[OrderController] confirmOrder error: $e');
-      errorMessage.value = '确认接单失败: $e';
+    } catch (e, stack) {
+      debugPrint('[OrderController] confirmOrder error: $e\n$stack');
+      errorMessage.value = describeApiError(e, fallback: '确认接单失败');
       return false;
     } finally {
       loading.value = false;
@@ -210,6 +246,7 @@ class OrderController extends GetxController {
 
     try {
       final res = await _orderApi.cancelOrder(id: id, cancelReason: reason);
+      if (_closed) return false; // 控制器已关闭：丢弃迟到响应
       if (res.isSuccess && res.data != null) {
         final updated = res.data!;
         currentOrder.value = updated;
@@ -219,9 +256,9 @@ class OrderController extends GetxController {
         errorMessage.value = res.message;
         return false;
       }
-    } catch (e) {
-      debugPrint('[OrderController] cancelOrder error: $e');
-      errorMessage.value = '取消订单失败: $e';
+    } catch (e, stack) {
+      debugPrint('[OrderController] cancelOrder error: $e\n$stack');
+      errorMessage.value = describeApiError(e, fallback: '取消订单失败');
       return false;
     } finally {
       loading.value = false;
@@ -235,6 +272,7 @@ class OrderController extends GetxController {
 
     try {
       final res = await _orderApi.completeOrder(id);
+      if (_closed) return false; // 控制器已关闭：丢弃迟到响应
       if (res.isSuccess && res.data != null) {
         final updated = res.data!;
         currentOrder.value = updated;
@@ -244,9 +282,9 @@ class OrderController extends GetxController {
         errorMessage.value = res.message;
         return false;
       }
-    } catch (e) {
-      debugPrint('[OrderController] completeOrder error: $e');
-      errorMessage.value = '完成交易失败: $e';
+    } catch (e, stack) {
+      debugPrint('[OrderController] completeOrder error: $e\n$stack');
+      errorMessage.value = describeApiError(e, fallback: '完成交易失败');
       return false;
     } finally {
       loading.value = false;
@@ -255,6 +293,7 @@ class OrderController extends GetxController {
 
   /// 本地列表缓存同步
   void _syncOrderInList(OrderVO updated) {
+    if (_closed) return;
     final index = orders.indexWhere((item) => item.id == updated.id);
     if (index != -1) {
       orders[index] = updated;

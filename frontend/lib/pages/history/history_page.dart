@@ -47,6 +47,11 @@ class _HistoryPageState extends State<HistoryPage> {
           return const Center(child: CircularProgressIndicator());
         }
 
+        // 错误态优先于空态：断网/超时不能伪装成"最近没有浏览过"
+        if (_controller.hasError && _controller.historyList.isEmpty) {
+          return _buildErrorState();
+        }
+
         if (_controller.historyList.isEmpty) {
           return Center(
             child: Column(
@@ -98,6 +103,38 @@ class _HistoryPageState extends State<HistoryPage> {
     );
   }
 
+  /// 加载失败错误态（与"最近还没有浏览过闲置商品"的空态严格区分）
+  Widget _buildErrorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cloud_off_outlined, size: 72, color: Colors.grey.shade400),
+            const SizedBox(height: 16),
+            const Text(
+              '浏览足迹加载失败',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _controller.errorMessage.value,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: () => _controller.loadHistory(refresh: true),
+              icon: const Icon(Icons.refresh),
+              label: const Text('点击重试'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildHistoryCard(BuildContext context, HistoryItemModel item) {
     final theme = Theme.of(context);
     // 只有 OFF_SHELF 显示「已下架」；已售出等其它不可购买状态显示各自文案
@@ -111,6 +148,7 @@ class _HistoryPageState extends State<HistoryPage> {
       child: InkWell(
         onTap: () async {
           await Get.toNamed(AppRoutes.goodsDetail, arguments: item.goodsId);
+          if (!mounted) return;
           _controller.loadHistory(refresh: true);
         },
         child: Padding(
