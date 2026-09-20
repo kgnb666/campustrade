@@ -1,6 +1,7 @@
 package com.campustrade.security;
 
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
@@ -12,15 +13,37 @@ import org.springframework.stereotype.Component;
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.UUID;
 
 /**
  * JWT Token 签发、校验与解析组件
+ *
+ * <p><b>密钥来源</b>：只从配置项 {@code jwt.secret}（即环境变量 {@code JWT_SECRET}）读取，
+ * 源码与配置文件中不再保留任何可用默认密钥。启动时执行 fail-fast 校验，
+ * 任何不满足要求的密钥都会让应用拒绝启动，而不是以弱密钥继续对外提供认证服务。</p>
  */
 @Slf4j
 @Component
 public class JwtTokenProvider {
 
-    @Value("${jwt.secret:campustrade-super-secure-jwt-secret-key-2026-campus-trade-platform-xyz-token}")
+    /**
+     * 密钥最小字节数：HMAC-SHA256 的密钥长度下限（32 字节 = 256 位）。
+     * jjwt 的 {@code Keys.hmacShaKeyFor} 同样要求 ≥ 32 字节，这里提前给出可读的错误提示。
+     */
+    private static final int MIN_SECRET_BYTES = 32;
+
+    /**
+     * 历史默认密钥的 SHA-256 摘要（该密钥曾硬编码在 application.yml 与源码 fallback 中，
+     * 必须视为已泄露的公开值）。此处只保存摘要而非明文：既能拒绝该密钥继续被使用，
+     * 又不会让已废弃的凭据字面量留在代码库中被安全扫描器判为硬编码凭据。
+     */
+    private static final String LEGACY_DEFAULT_SECRET_SHA256 =
+            "0b0b20511b17f1840974fa267b96faed7099fab867c316abffe2a1e26458014b";
+
+    /**
+     * JWT 密钥。无默认值：缺失时为空串，由 {@link #init()} 统一给出明确中文提示并拒绝启动。
+     */
+    @Value("${jwt.secret:}")
     private String secret;
 
     @Value("${jwt.access-token-expiration:7200000}")
@@ -31,19 +54,55 @@ public class JwtTokenProvider {
 
     private SecretKey key;
 
+    /**
+     * 启动期密钥校验与密钥材料构建（fail-fast）。
+     *
+     * <p>三种情况一律拒绝启动：密钥缺失/空白、长度不足 32 字节、命中历史默认密钥。
+     * 提示语直接给出可照做的解决办法，避免运维面对 "Could not resolve placeholder"
+     * 之类的间接报错去猜原因。</p>
+     */
     @PostConstruct
     public void init() {
-        this.key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+        // 去掉环境变量注入时可能夹带的换行与首尾空白（.env 解析、CI 注入都可能引入）
+        String normalized = secret == null ? null : secret.trim();
+
+        if (normalized == null || normalized.isEmpty()) {
+            throw new IllegalStateException(
+                    "JWT 密钥缺失：认证服务拒绝启动。请通过环境变量 JWT_SECRET 提供密钥（至少 "
+                            + MIN_SECRET_BYTES + " 字节），例如执行 openssl rand -hex 32 生成；"
+                            + "本地开发可在项目根目录 .env 中配置 JWT_SECRET，由 backend/run-backend.cmd 自动注入");
+        }
+
+        byte[] keyBytes = normalized.getBytes(StandardCharsets.UTF_8);
+        if (keyBytes.length < MIN_SECRET_BYTES) {
+            throw new IllegalStateException(
+                    "JWT 密钥强度不足：当前长度 " + keyBytes.length + " 字节，要求至少 " + MIN_SECRET_BYTES
+                            + " 字节。请重新生成并写入环境变量 JWT_SECRET，例如执行 openssl rand -hex 32");
+        }
+
+        if (LEGACY_DEFAULT_SECRET_SHA256.equalsIgnoreCase(TokenHashUtils.sha256Hex(normalized))) {
+            throw new IllegalStateException(
+                    "JWT 密钥不安全：检测到正在使用已公开的历史默认密钥，该密钥必须视为已泄露。"
+                            + "请重新生成 JWT_SECRET（例如执行 openssl rand -hex 32）后再启动");
+        }
+
+        this.key = Keys.hmacShaKeyFor(keyBytes);
+        log.info("JWT 密钥校验通过（来源: 环境变量/配置项 jwt.secret，长度: {} 字节）", keyBytes.length);
     }
 
     /**
      * 生成 Access Token (2小时)
+     *
+     * <p>显式写入随机 {@code jti}：JWT 的时间戳只精确到秒，同一秒内为同一用户签发的令牌
+     * 若不携带唯一标识就会逐字节相同——这会让"刷新即轮换"退化为"原样返回同一个令牌"，
+     * 也会让登出黑名单/日志指纹无法区分具体是哪一次签发。因此每次签发都带上随机 jti。</p>
      */
     public String generateAccessToken(Long userId, String username, String role) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + accessTokenExpiration);
 
         return Jwts.builder()
+                .id(UUID.randomUUID().toString())
                 .subject(username)
                 .claim("userId", userId)
                 .claim("role", role)
@@ -55,13 +114,17 @@ public class JwtTokenProvider {
     }
 
     /**
-     * 生成 Refresh Token (7天)
+     * 生成 Refresh Token (7天)。
+     *
+     * <p>同样携带随机 {@code jti}：轮换必须真正产生"新令牌"，
+     * 否则旧令牌仍然等于新令牌，重放检测与轮换都会失去意义。</p>
      */
     public String generateRefreshToken(Long userId, String username) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + refreshTokenExpiration);
 
         return Jwts.builder()
+                .id(UUID.randomUUID().toString())
                 .subject(username)
                 .claim("userId", userId)
                 .claim("type", "refresh")
@@ -106,11 +169,45 @@ public class JwtTokenProvider {
      * 获取用户 ID
      */
     public Long getUserId(String token) {
-        Object val = getClaims(token).get("userId");
-        if (val instanceof Number) {
-            return ((Number) val).longValue();
+        return extractUserId(getClaims(token));
+    }
+
+    /**
+     * 在令牌已过期的情况下仍尽力解析用户 ID，用于登出清理会话。
+     *
+     * <p>登出接口只需携带 Access Token：若该令牌恰好刚过期，按常规解析会抛
+     * {@code ExpiredJwtException}，导致 Refresh Token 会话无法被清除（用户"登不出去"、
+     * 刷新接口仍可换取新令牌）。这里对"签名有效但已过期"的令牌沿用其 Claims，
+     * 从而把会话一并清理掉；签名非法或格式错误的令牌仍返回 null。</p>
+     *
+     * @return 用户 ID；无法安全解析时返回 null
+     */
+    public Long getUserIdAllowingExpired(String token) {
+        try {
+            return getUserId(token);
+        } catch (ExpiredJwtException ex) {
+            return extractUserId(ex.getClaims());
+        } catch (JwtException | IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    private Long extractUserId(Claims claims) {
+        if (claims == null) {
+            return null;
+        }
+        Object val = claims.get("userId");
+        if (val instanceof Number number) {
+            return number.longValue();
         }
         return val != null ? Long.parseLong(val.toString()) : null;
+    }
+
+    /**
+     * Refresh Token 有效期（毫秒），用于设置 Redis 会话摘要的 TTL
+     */
+    public long getRefreshTokenExpiration() {
+        return refreshTokenExpiration;
     }
 
     /**

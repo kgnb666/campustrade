@@ -90,6 +90,17 @@ public class TestContainersConfig {
     private static final String POSTGRES_INIT_SCRIPT = "testcontainers-postgres-init.sql";
 
     /**
+     * 测试用 JWT 密钥：运行时随机生成（两段 UUID 拼成 64 位十六进制 = 64 字节，远超 32 字节下限）。
+     *
+     * <p>后端已取消一切默认密钥并做启动期 fail-fast 校验，因此测试必须自带密钥；
+     * 但<b>绝不允许</b>在源码或配置文件里写死任何"可用密钥"字面量——
+     * 那既会被安全门禁判为硬编码凭据，也会随代码库外泄。
+     * 运行时随机会让每次测试 JVM 的签名密钥都不同，任何跨运行的令牌都无法复用。</p>
+     */
+    private static final String JWT_SECRET =
+            UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "");
+
+    /**
      * PostgreSQL 16：库名/账号与开发环境同名同规格，避免测试代码任何隐式假设。
      * {@code currentSchema} 让连接的 search_path 落在 campus_trade（与开发 URL 一致）。
      * {@code withInitScript} 在容器启动时就预建 campus_trade schema——原因见该脚本内的注释：
@@ -173,7 +184,9 @@ public class TestContainersConfig {
     }
 
     /**
-     * 把所有测试上下文都接上 MinIO 动态属性的 {@link ContextCustomizerFactory} 实现。
+     * 把所有测试上下文都接上"运行时动态属性"的 {@link ContextCustomizerFactory} 实现。
+     *
+     * <p>当前提供两类动态属性：MinIO 端点/凭据，以及测试 JVM 内随机生成的 {@code jwt.secret}。</p>
      *
      * <p>它返回的是同一个 {@code static final} 单例 customizer：ContextCustomizer 的 equals 会影响
      * Spring 的上下文缓存键，若每个测试类拿到不同实例，20 个测试类就会各自建一遍上下文（变慢），
@@ -183,10 +196,10 @@ public class TestContainersConfig {
 
         private static final ContextCustomizer CUSTOMIZER = (context, mergedConfig) -> {
             ConfigurableEnvironment environment = context.getEnvironment();
-            // 与 @Profile("test") 保持一致：只在 test profile 下改写 MinIO 目标
+            // 与 @Profile("test") 保持一致：只在 test profile 下改写 MinIO 目标与 JWT 密钥
             if (environment.acceptsProfiles(Profiles.of("test"))) {
                 environment.getPropertySources()
-                        .addFirst(new MinioPropertySource(environment));
+                        .addFirst(new TestInfraPropertySource(environment));
             }
         };
 
@@ -198,19 +211,23 @@ public class TestContainersConfig {
     }
 
     /**
-     * MinIO 动态属性源：值与容器映射端口绑定，因此<b>延迟解析</b>（每次 getProperty 时计算）。
+     * 测试基础设施动态属性源：MinIO 端点/凭据 + 运行时随机 {@code jwt.secret}。
      *
-     * <p>延迟还有一个必要原因：{@code minio.url-prefix} 需要用到 {@code minio.bucket-name}，
-     * 而桶名来自 application-test.yml；在 customizer 执行的那一刻（refresh 之前）读取环境属性
-     * 才能拿到最终生效值，这里通过持有 environment 在解析时再取值来避免时序问题。</p>
+     * <p>MinIO 相关的值必须<b>延迟解析</b>（每次 getProperty 时计算）：{@code minio.url-prefix}
+     * 需要用到 {@code minio.bucket-name}，而桶名来自 application-test.yml；
+     * 在 customizer 执行的那一刻（refresh 之前）读取环境属性才能拿到最终生效值，
+     * 这里通过持有 environment 在解析时再取值来避免时序问题。</p>
+     *
+     * <p>{@code jwt.secret} 指向本类中运行时生成的随机值：源码与配置文件里都不存在任何可用密钥字面量，
+     * 同时满足 JwtTokenProvider 的启动期长度校验（≥32 字节）。</p>
      */
-    private static final class MinioPropertySource extends PropertySource<Object> {
+    private static final class TestInfraPropertySource extends PropertySource<Object> {
 
-        private static final String PROPERTY_SOURCE_NAME = "testcontainers-minio";
+        private static final String PROPERTY_SOURCE_NAME = "testcontainers-dynamic";
 
         private final ConfigurableEnvironment environment;
 
-        private MinioPropertySource(ConfigurableEnvironment environment) {
+        private TestInfraPropertySource(ConfigurableEnvironment environment) {
             super(PROPERTY_SOURCE_NAME);
             this.environment = environment;
         }
@@ -223,6 +240,7 @@ public class TestContainersConfig {
                 case "minio.secret-key" -> MINIO_SECRET_KEY;
                 case "minio.url-prefix" -> minioEndpoint() + "/"
                         + environment.getProperty("minio.bucket-name", DEFAULT_MINIO_BUCKET);
+                case "jwt.secret" -> JWT_SECRET;
                 default -> null;
             };
         }

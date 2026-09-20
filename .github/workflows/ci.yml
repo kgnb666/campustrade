@@ -46,10 +46,13 @@ jobs:
       SPRING_DATASOURCE_PASSWORD: campustrade
       SPRING_DATA_REDIS_HOST: 127.0.0.1
       SPRING_DATA_REDIS_PORT: 6379
-      JWT_SECRET: ci-only-not-a-real-secret-please-override-in-production-32b
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: 生成一次性 JWT 密钥
+        # 工作流中现取现用：不把任何密钥字面量写进仓库，每次运行密钥都不同
+        run: echo "JWT_SECRET=$(openssl rand -hex 32)" >> "$GITHUB_ENV"
 
       - name: 安装 JDK 21
         uses: actions/setup-java@v4

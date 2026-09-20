@@ -123,7 +123,7 @@ class _RegisterPageState extends State<RegisterPage> {
                     obscureText: _obscurePassword,
                     decoration: InputDecoration(
                       labelText: '设置密码',
-                      hintText: '至少6位字符',
+                      hintText: '至少8位，需同时包含字母和数字',
                       prefixIcon: const Icon(Icons.lock_outline),
                       border: const OutlineInputBorder(),
                       suffixIcon: IconButton(
@@ -139,8 +139,15 @@ class _RegisterPageState extends State<RegisterPage> {
                       if (value == null || value.isEmpty) {
                         return '请输入密码';
                       }
-                      if (value.length < 6) {
-                        return '密码不能少于6位';
+                      if (value.length < 8) {
+                        return '密码不能少于8位';
+                      }
+                      if (value.length > 50) {
+                        return '密码不能超过50位';
+                      }
+                      // 与后端 RegisterRequestDTO 的口令强度规则保持一致：必须同时包含字母与数字
+                      if (!RegExp(r'^(?=.*[A-Za-z])(?=.*\d).+$').hasMatch(value)) {
+                        return '密码必须同时包含字母和数字';
                       }
                       return null;
                     },

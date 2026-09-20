@@ -14,6 +14,7 @@ import com.campustrade.mapper.UserCreditMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.security.JwtAuthenticationFilter;
 import com.campustrade.security.JwtTokenProvider;
+import com.campustrade.security.TokenHashUtils;
 import com.campustrade.service.AuthService;
 import com.campustrade.service.UserService;
 import com.campustrade.vo.LoginVO;
@@ -21,6 +22,7 @@ import com.campustrade.vo.TokenRefreshVO;
 import com.campustrade.vo.UserProfileVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -32,6 +34,16 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * 认证与授权业务实现类
+ *
+ * <h2>会话与令牌安全设计</h2>
+ * <ul>
+ *   <li><b>Refresh Token 只存摘要</b>：Redis 中 {@code jwt:refresh:{userId}} 的值是令牌的
+ *       SHA-256 摘要，缓存被读取也无法直接换取访问令牌；</li>
+ *   <li><b>登出即失效</b>：登出同时把 Access Token 写入黑名单并删除该用户的 Refresh Token 会话；</li>
+ *   <li><b>刷新即轮换</b>：每次成功刷新都会签发新的 Refresh Token 并覆盖旧摘要；
+ *       旧令牌再次出现即视为重放，立刻清空该用户会话要求重新登录；</li>
+ *   <li><b>登录防爆破</b>：按"用户名 + 来源 IP"双维度计数，连续失败达到阈值后临时锁定。</li>
+ * </ul>
  */
 @Slf4j
 @Service
@@ -47,9 +59,24 @@ public class AuthServiceImpl implements AuthService {
 
     public static final String REFRESH_TOKEN_PREFIX = RedisKeyConstants.JWT_REFRESH_PREFIX;
 
+    /** 连续登录失败多少次后锁定（默认 5 次） */
+    @Value("${security.login.max-failures:5}")
+    private int loginMaxFailures;
+
+    /** 登录失败计数与锁定窗口时长（分钟），默认 15 分钟 */
+    @Value("${security.login.lock-minutes:15}")
+    private long loginLockMinutes;
+
+    /** 同一来源 IP 每小时允许的注册请求上限（默认 20 次） */
+    @Value("${security.register.ip-limit-per-hour:20}")
+    private int registerIpLimitPerHour;
+
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Result<Void> register(RegisterRequestDTO dto) {
+    public Result<Void> register(RegisterRequestDTO dto, String clientIp) {
+        // 0. 来源 IP 注册限频：阻断脚本化批量注册（每次请求都计数，命中上限直接拒绝）
+        enforceRegisterIpLimit(clientIp);
+
         // 1. 用户名重复校验
         Long usernameCount = userMapper.selectCount(
                 new LambdaQueryWrapper<User>().eq(User::getUsername, dto.getUsername())
@@ -99,13 +126,24 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    public Result<LoginVO> login(LoginRequestDTO dto) {
+    public Result<LoginVO> login(LoginRequestDTO dto, String clientIp) {
+        // 计数键与数据库查询键分开：计数键做标准化（去首尾空白），避免用空白字符绕过限流
+        String failUsernameKey = RedisKeyConstants.LOGIN_FAIL_USERNAME_PREFIX
+                + (dto.getUsername() == null ? "" : dto.getUsername().trim());
+        String failIpKey = RedisKeyConstants.LOGIN_FAIL_IP_PREFIX + clientIp;
+
+        // 0. 锁定校验：达到阈值后直接拒绝，不再进行密码比对
+        assertNotLocked(failUsernameKey, "登录失败次数过多，账号已被临时锁定，请 " + loginLockMinutes + " 分钟后再试");
+        assertNotLocked(failIpKey, "当前网络登录失败次数过多，已被临时锁定，请 " + loginLockMinutes + " 分钟后再试");
+
         // 1. 根据用户名查找用户
         User user = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getUsername, dto.getUsername())
         );
 
         if (user == null || !passwordEncoder.matches(dto.getPassword(), user.getPassword())) {
+            // 失败计数：用户名维度 + 来源 IP 维度，两个维度任一达到阈值即进入锁定
+            recordLoginFailure(failUsernameKey, failIpKey);
             throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "用户名或密码错误");
         }
 
@@ -113,19 +151,17 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ResultCode.FORBIDDEN.getCode(), "该账号已被禁用，请联系平台管理员");
         }
 
-        // 2. 生成 Access Token (2小时) 与 Refresh Token (7天)
+        // 2. 登录成功：清零失败计数，避免历史失败次数累积到误锁
+        clearLoginFailures(failUsernameKey, failIpKey);
+
+        // 3. 生成 Access Token (2小时) 与 Refresh Token (7天)
         String accessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getUsername(), user.getRole());
         String refreshToken = jwtTokenProvider.generateRefreshToken(user.getId(), user.getUsername());
 
-        // 3. 将 Refresh Token 存入 Redis 维护会话有效性 (TTL: 7天)
-        stringRedisTemplate.opsForValue().set(
-                REFRESH_TOKEN_PREFIX + user.getId(),
-                refreshToken,
-                7,
-                TimeUnit.DAYS
-        );
+        // 4. 会话有效性以 Redis 中的 Refresh Token 摘要为准 (TTL: 7天)
+        saveRefreshSession(user.getId(), refreshToken);
 
-        // 4. 查询当前用户基础信息与信用数据
+        // 5. 查询当前用户基础信息与信用数据
         UserProfileVO profile = userService.getProfile(user.getUsername()).getData();
 
         LoginVO loginVO = LoginVO.builder()
@@ -152,7 +188,16 @@ public class AuthServiceImpl implements AuthService {
                         remainingMs,
                         TimeUnit.MILLISECONDS
                 );
-                log.info("Token 已加入 Redis 黑名单，剩余有效时间: {} 毫秒", remainingMs);
+                log.info("Access Token 已加入 Redis 黑名单，剩余有效时间: {} 毫秒", remainingMs);
+            }
+
+            // 删除该用户的 Refresh Token 会话：登出后刷新接口不再可用，无法"续命"出新令牌
+            Long userId = jwtTokenProvider.getUserIdAllowingExpired(token);
+            if (userId != null) {
+                Boolean removed = stringRedisTemplate.delete(REFRESH_TOKEN_PREFIX + userId);
+                log.info("登出已清除 Refresh Token 会话: userId={}, removed={}", userId, removed);
+            } else {
+                log.warn("登出请求未能解析出用户身份，跳过 Refresh Token 会话清理（令牌可能非法或已被篡改）");
             }
         }
         return Result.success("安全登出成功", null);
@@ -177,15 +222,25 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "无效的令牌类型，必须使用 Refresh Token 进行续期");
         }
 
-        // 3. 用户身份与 Redis 白名单匹配校验
+        // 3. 用户身份与 Redis 会话摘要匹配校验（Redis 只保存摘要，比对的是摘要而非令牌明文）
         Long userId = jwtTokenProvider.getUserId(refreshToken);
         if (userId == null) {
             throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "无效的令牌载荷信息");
         }
 
-        String cachedRefreshToken = stringRedisTemplate.opsForValue().get(REFRESH_TOKEN_PREFIX + userId);
-        if (cachedRefreshToken == null || !cachedRefreshToken.equals(refreshToken)) {
-            log.warn("Refresh Token 白名单校验失败或已被置换: userId={}", userId);
+        String refreshKey = REFRESH_TOKEN_PREFIX + userId;
+        String cachedHash = stringRedisTemplate.opsForValue().get(refreshKey);
+        String presentedHash = TokenHashUtils.sha256Hex(refreshToken);
+
+        if (cachedHash == null || !cachedHash.equals(presentedHash)) {
+            if (cachedHash != null) {
+                // 已轮换过的旧令牌被再次提交：视为重放/泄露信号，立即清空该用户会话
+                stringRedisTemplate.delete(refreshKey);
+                log.warn("检测到 Refresh Token 重放（摘要不匹配），已清空该用户会话: userId={}, presentedFp={}, cachedFp={}",
+                        userId, TokenHashUtils.fingerprint(presentedHash), TokenHashUtils.fingerprint(cachedHash));
+            } else {
+                log.warn("Refresh Token 会话不存在（可能已登出或超时）: userId={}", userId);
+            }
             throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "Refresh Token 已失效或已被其他设备置换，请重新登录");
         }
 
@@ -195,16 +250,98 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ResultCode.FORBIDDEN.getCode(), "用户账号不存在或已被封禁");
         }
 
-        // 5. 签发新的 Access Token (2小时) 并保留/返回 Refresh Token
+        // 5. 刷新即轮换：签发新的 Access Token 与新的 Refresh Token，并用新摘要覆盖旧会话
         String newAccessToken = jwtTokenProvider.generateAccessToken(user.getId(), user.getUsername(), user.getRole());
+        String newRefreshToken = jwtTokenProvider.generateRefreshToken(user.getId(), user.getUsername());
+        saveRefreshSession(user.getId(), newRefreshToken);
 
         TokenRefreshVO vo = TokenRefreshVO.builder()
                 .accessToken(newAccessToken)
-                .refreshToken(refreshToken)
+                .refreshToken(newRefreshToken)
                 .build();
 
-        log.info("用户成功续期 Access Token: userId={}, username={}", user.getId(), user.getUsername());
+        log.info("用户成功续期并轮换令牌: userId={}, username={}, tokenFp={}",
+                user.getId(), user.getUsername(), TokenHashUtils.fingerprint(newRefreshToken));
         return Result.success("令牌刷新成功", vo);
+    }
+
+    // =========================================================================
+    // 内部防护与 Redis 辅助方法
+    // =========================================================================
+
+    /**
+     * 写入/覆盖 Refresh Token 会话：Redis 中只保存令牌的 SHA-256 摘要，不保存令牌明文。
+     */
+    private void saveRefreshSession(Long userId, String refreshToken) {
+        stringRedisTemplate.opsForValue().set(
+                REFRESH_TOKEN_PREFIX + userId,
+                TokenHashUtils.sha256Hex(refreshToken),
+                jwtTokenProvider.getRefreshTokenExpiration(),
+                TimeUnit.MILLISECONDS
+        );
+    }
+
+    /**
+     * 注册来源 IP 限频：同一 IP 每个时间窗口（1 小时）内的注册请求次数上限。
+     */
+    private void enforceRegisterIpLimit(String clientIp) {
+        String key = RedisKeyConstants.REGISTER_IP_PREFIX + clientIp;
+        Long count = stringRedisTemplate.opsForValue().increment(key);
+        if (count != null && count == 1L) {
+            stringRedisTemplate.expire(key, 1, TimeUnit.HOURS);
+        }
+        if (count != null && count > registerIpLimitPerHour) {
+            log.warn("注册请求触发来源 IP 限频: ip={}, count={}, limit={}", clientIp, count, registerIpLimitPerHour);
+            throw new BusinessException(429, "注册请求过于频繁，请稍后再试");
+        }
+    }
+
+    /**
+     * 判断给定计数键是否已达锁定阈值。
+     */
+    private void assertNotLocked(String key, String lockMessage) {
+        String value = stringRedisTemplate.opsForValue().get(key);
+        if (!StringUtils.hasText(value)) {
+            return;
+        }
+
+        int failureCount;
+        try {
+            failureCount = Integer.parseInt(value);
+        } catch (NumberFormatException ex) {
+            // 计数键内容异常（被人工改写等），清理后按未锁定处理，避免把用户永久挡在门外
+            log.warn("登录失败计数键内容非法，已重置: key={}, value={}", key, value);
+            stringRedisTemplate.delete(key);
+            return;
+        }
+
+        if (failureCount >= loginMaxFailures) {
+            throw new BusinessException(429, lockMessage);
+        }
+    }
+
+    /**
+     * 记录一次登录失败。计数窗口采用滑动窗口（每次失败刷新 TTL），阈值由配置决定。
+     */
+    private void recordLoginFailure(String failUsernameKey, String failIpKey) {
+        incrementWithTtl(failUsernameKey);
+        incrementWithTtl(failIpKey);
+    }
+
+    private void incrementWithTtl(String key) {
+        Long count = stringRedisTemplate.opsForValue().increment(key);
+        stringRedisTemplate.expire(key, loginLockMinutes, TimeUnit.MINUTES);
+        if (count != null && count >= loginMaxFailures) {
+            log.warn("登录失败次数达到锁定阈值: key={}, count={}, lockMinutes={}", key, count, loginLockMinutes);
+        }
+    }
+
+    /**
+     * 登录成功后清零失败计数。
+     */
+    private void clearLoginFailures(String failUsernameKey, String failIpKey) {
+        stringRedisTemplate.delete(failUsernameKey);
+        stringRedisTemplate.delete(failIpKey);
     }
 }
 

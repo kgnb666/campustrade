@@ -5,6 +5,8 @@ import com.campustrade.common.ResultCode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.MediaType;
@@ -28,19 +30,33 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 
 /**
  * Spring Security 6 核心安全配置
+ *
+ * <p>CORS 来源白名单由配置项 {@code cors.allowed-origins}（逗号分隔，支持
+ * {@code http://localhost:*} 这类端口通配）决定，默认只放行本机开发地址。
+ * 在 {@code allowCredentials=true} 的前提下，绝不允许无条件 {@code *}：
+ * 那会让任意站点带着浏览器凭据访问本服务。</p>
  */
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
 @RequiredArgsConstructor
+@Slf4j
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
     private final ObjectMapper objectMapper;
+
+    /**
+     * 允许的跨域来源白名单（逗号分隔）。默认值覆盖本地开发常见的 localhost / 127.0.0.1 任意端口，
+     * 生产环境请通过环境变量 {@code CORS_ALLOWED_ORIGINS} 覆盖为真实前端域名。
+     */
+    @Value("${cors.allowed-origins:http://localhost:*,http://127.0.0.1:*}")
+    private String allowedOrigins;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -144,11 +160,26 @@ public class SecurityConfig {
 
     /**
      * CORS 跨域规则配置 Source
+     *
+     * <p>来源白名单来自配置项 {@code cors.allowed-origins}，逐项去空白后使用
+     * {@code setAllowedOriginPatterns} 注册（支持 {@code http://localhost:*} 端口通配）。
+     * {@code allowCredentials} 保持 true，但生效范围被严格限定在白名单之内。</p>
      */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
+        List<String> origins = Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim)
+                .filter(origin -> !origin.isEmpty())
+                .toList();
+
+        if (origins.isEmpty()) {
+            // 白名单为空时不允许跨域，而不是退回无条件放行
+            origins = List.of("http://localhost");
+            log.warn("配置项 cors.allowed-origins 为空，跨域请求将仅允许 http://localhost");
+        }
+
         CorsConfiguration configuration = new CorsConfiguration();
-        configuration.setAllowedOriginPatterns(List.of("*"));
+        configuration.setAllowedOriginPatterns(origins);
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
         configuration.setAllowedHeaders(List.of("*"));
         configuration.setAllowCredentials(true);

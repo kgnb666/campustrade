@@ -53,10 +53,26 @@ minio:
   url-prefix: ${MINIO_URL_PREFIX:http://127.0.0.1:9000/campustrade}
 
 # JWT 认证配置
+# secret 只从环境变量 JWT_SECRET 读取，此处刻意不提供任何默认值：
+# 缺失 / 长度不足 32 字节 / 命中历史默认密钥时，JwtTokenProvider 会在启动期直接拒绝启动。
+# 本地开发在项目根目录 .env 中配置（由 backend/run-backend.cmd 注入）；生产由部署环境注入。
 jwt:
-  secret: ${JWT_SECRET:campustrade-super-secure-jwt-secret-key-2026-campus-trade-platform-xyz-token}
+  secret: ${JWT_SECRET:}
   access-token-expiration: 7200000 # 2小时 (毫秒)
   refresh-token-expiration: 604800000 # 7天 (毫秒)
+
+# 认证防护阈值配置
+security:
+  login:
+    max-failures: ${SECURITY_LOGIN_MAX_FAILURES:5}       # 连续登录失败次数上限
+    lock-minutes: ${SECURITY_LOGIN_LOCK_MINUTES:15}      # 触发上限后的锁定窗口（分钟）
+  register:
+    ip-limit-per-hour: ${SECURITY_REGISTER_IP_LIMIT:20}  # 单一来源 IP 每小时注册请求上限
+
+# CORS 跨域来源白名单 (逗号分隔，支持 http://localhost:* 端口通配)
+# allowCredentials 恒为 true，因此绝不允许写 "*"：那等于允许任意站点携带凭据访问本服务。
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:*,http://127.0.0.1:*}
 
 # MyBatis-Plus 配置
 mybatis-plus:
@@ -80,10 +96,11 @@ deepseek:
   timeout: ${DEEPSEEK_TIMEOUT:15000}
 
 # 日志配置
+# 业务包保持 INFO：DEBUG 级别会把请求细节（含凭据类字段）打印到日志，生产环境不应开启。
 logging:
   level:
     root: INFO
-    com.campustrade: DEBUG
+    com.campustrade: INFO
     org.springframework.web: INFO
     com.baomidou.mybatisplus: DEBUG
   pattern:

@@ -13,6 +13,7 @@ import com.campustrade.exception.BusinessException;
 import com.campustrade.mapper.CampusSchoolMapper;
 import com.campustrade.mapper.StudentVerifyMapper;
 import com.campustrade.mapper.UserMapper;
+import com.campustrade.security.TokenHashUtils;
 import com.campustrade.service.StudentVerifyService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -73,7 +74,9 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
         // 5. 保存验证码至 Redis (TTL: 5 分钟)
         String redisKey = VERIFY_CODE_PREFIX + email;
         stringRedisTemplate.opsForValue().set(redisKey, verifyCode, VERIFY_CODE_TTL_MINUTES, TimeUnit.MINUTES);
-        log.info("生成校园邮箱验证码: email={}, code={}, TTL=5m", email, verifyCode);
+        // 安全要求：验证码属于一次性凭据，绝不能写入日志（日志会被长期留存并被多人查看）
+        log.info("生成校园邮箱验证码: email={}, codeHash={}, TTL=5m",
+                email, TokenHashUtils.fingerprint(redisKey + verifyCode));
 
         // 6. 保存或更新学生认证记录为 PENDING 状态
         StudentVerify existingVerify = studentVerifyMapper.selectOne(

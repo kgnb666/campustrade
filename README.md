@@ -72,6 +72,16 @@ docker compose up -d
 ```
 
 #### 2. 启动后端
+
+> **JWT_SECRET 是必填项**：后端不再内置任何默认 JWT 密钥。缺失、长度不足 32 字节、
+> 或仍在沿用历史默认密钥时，`JwtTokenProvider` 会在启动期直接拒绝启动并打印中文提示。
+> 本地开发用 `backend/run-backend.cmd` 启动即可：它会自动解析项目根目录 `.env`
+> （`JWT_SECRET`、`SPRING_*`、`MINIO_*` 等）并导出为进程环境变量。
+> 首次使用请执行 `openssl rand -hex 32` 生成密钥并填入 `.env`；
+> **生产环境由部署平台注入环境变量 `JWT_SECRET`**，不要写进任何配置文件或镜像。
+> 注意：`.env` / `.env.example` 必须保持纯 ASCII 文本 —— cmd 在 GBK 控制台下按行解析，
+> UTF-8 中文注释的尾字节会被当成双字节字符并吞掉行尾换行，导致下一行配置被静默跳过。
+
 ```bash
 cd backend
 mvn spring-boot:run

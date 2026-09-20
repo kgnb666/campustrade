@@ -11,6 +11,7 @@ import com.campustrade.mapper.UserCreditLogMapper;
 import com.campustrade.mapper.UserCreditMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.security.JwtTokenProvider;
+import com.campustrade.security.TokenHashUtils;
 import com.campustrade.service.CreditService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -267,7 +268,7 @@ public class CampusTradeFixStage1Tests {
     }
 
     /**
-     * 测试用例 5: 【ARCH-01】/auth/refresh 刷新令牌合法性测试 (成功续签 Access Token)
+     * 测试用例 5: 【ARCH-01】/auth/refresh 刷新令牌合法性测试 (成功续签 Access Token 并轮换 Refresh Token)
      */
     @Test
     void test05_refresh_token_success() throws Exception {
@@ -283,9 +284,14 @@ public class CampusTradeFixStage1Tests {
                 .build();
         userMapper.insert(user);
 
-        // 生成合法 Refresh Token 并存入 Redis
+        // 生成合法 Refresh Token 并写入 Redis 会话（Redis 中只保存 SHA-256 摘要，不存令牌明文）
         String refreshToken = jwtTokenProvider.generateRefreshToken(user.getId(), user.getUsername());
-        stringRedisTemplate.opsForValue().set(RedisKeyConstants.JWT_REFRESH_PREFIX + user.getId(), refreshToken, 7, TimeUnit.DAYS);
+        stringRedisTemplate.opsForValue().set(
+                RedisKeyConstants.JWT_REFRESH_PREFIX + user.getId(),
+                TokenHashUtils.sha256Hex(refreshToken),
+                7,
+                TimeUnit.DAYS
+        );
 
         RefreshTokenRequest request = RefreshTokenRequest.builder()
                 .refreshToken(refreshToken)
@@ -297,13 +303,22 @@ public class CampusTradeFixStage1Tests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.accessToken").isNotEmpty())
-                .andExpect(jsonPath("$.data.refreshToken").value(refreshToken))
+                .andExpect(jsonPath("$.data.refreshToken").isNotEmpty())
                 .andReturn();
 
         // 验证返回的新 Access Token 可以成功调用受保护接口
         String responseBody = mvcResult.getResponse().getContentAsString(StandardCharsets.UTF_8);
         JsonNode root = objectMapper.readTree(responseBody);
         String newAccessToken = root.path("data").path("accessToken").asText();
+        String rotatedRefreshToken = root.path("data").path("refreshToken").asText();
+
+        // 刷新即轮换：返回的是全新的 Refresh Token，且 Redis 中保存的是新令牌的摘要
+        // 断言刻意不用 assertEquals(期望值, 实际值, ...)：失败时 JUnit 会把令牌明文打进报告，
+        // 与"日志/产物中不得出现完整令牌"的约束冲突，这里只断言布尔结果。
+        assertFalse(refreshToken.equals(rotatedRefreshToken), "刷新成功后必须轮换出新的 Refresh Token");
+        assertTrue(TokenHashUtils.sha256Hex(rotatedRefreshToken)
+                        .equals(stringRedisTemplate.opsForValue().get(RedisKeyConstants.JWT_REFRESH_PREFIX + user.getId())),
+                "Redis 会话必须已更新为新 Refresh Token 的摘要");
 
         mockMvc.perform(get("/user/profile")
                         .header("Authorization", "Bearer " + newAccessToken))
@@ -345,7 +360,7 @@ public class CampusTradeFixStage1Tests {
                 .build();
         userMapper.insert(user);
 
-        // 生成了 Token 但未存入 Redis (模拟被其他设备登出或置换)
+        // 生成了 Token 但未写入 Redis 会话 (模拟被其他设备登出或置换)
         String refreshToken = jwtTokenProvider.generateRefreshToken(user.getId(), user.getUsername());
         stringRedisTemplate.delete(RedisKeyConstants.JWT_REFRESH_PREFIX + user.getId());
 
@@ -378,7 +393,12 @@ public class CampusTradeFixStage1Tests {
         userMapper.insert(user);
 
         String refreshToken = jwtTokenProvider.generateRefreshToken(user.getId(), user.getUsername());
-        stringRedisTemplate.opsForValue().set(RedisKeyConstants.JWT_REFRESH_PREFIX + user.getId(), refreshToken, 7, TimeUnit.DAYS);
+        stringRedisTemplate.opsForValue().set(
+                RedisKeyConstants.JWT_REFRESH_PREFIX + user.getId(),
+                TokenHashUtils.sha256Hex(refreshToken),
+                7,
+                TimeUnit.DAYS
+        );
 
         RefreshTokenRequest request = RefreshTokenRequest.builder()
                 .refreshToken(refreshToken)
