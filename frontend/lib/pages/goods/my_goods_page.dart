@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import '../../controllers/goods_controller.dart';
 import '../../models/goods_model.dart';
 import '../../routes/app_routes.dart';
+import '../../models/status_enums.dart';
 
 /// 我的发布商品管理页面
 class MyGoodsPage extends StatefulWidget {
@@ -86,7 +87,7 @@ class _MyGoodsPageState extends State<MyGoodsPage> {
   }
 
   Widget _buildMyGoodsItem(BuildContext context, GoodsItemModel goods, ThemeData theme) {
-    final isOnSale = goods.status == 'ON_SALE';
+    final isOnSale = GoodsStatus.fromCode(goods.status)?.isBuyable ?? false;
 
     return Card(
       elevation: 1.5,
@@ -208,27 +209,28 @@ class _MyGoodsPageState extends State<MyGoodsPage> {
     Color fg;
     String label;
 
-    switch (status) {
-      case 'ON_SALE':
+    // 文案与配色都由 GoodsStatus 决定：已售出与已下架是两个不同的展示，
+    // 未知取值回退为服务端原文（不再静默当成某个已知状态）。
+    switch (GoodsStatus.fromCode(status)) {
+      case GoodsStatus.onSale:
         bg = Colors.green.shade50;
         fg = Colors.green.shade700;
-        label = '在售中';
         break;
-      case 'OFF_SHELF':
+      case GoodsStatus.offShelf:
         bg = Colors.grey.shade100;
         fg = Colors.grey.shade700;
-        label = '已下架';
         break;
-      case 'SOLD':
+      case GoodsStatus.sold:
         bg = Colors.blue.shade50;
         fg = Colors.blue.shade700;
-        label = '已售出';
         break;
-      default:
+      case GoodsStatus.locked:
+      case GoodsStatus.draft:
+      case null:
         bg = Colors.orange.shade50;
         fg = Colors.orange.shade700;
-        label = status;
     }
+    label = GoodsStatus.labelOf(status);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),

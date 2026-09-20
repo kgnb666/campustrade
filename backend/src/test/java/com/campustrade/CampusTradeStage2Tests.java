@@ -303,7 +303,7 @@ class CampusTradeStage2Tests {
         mockMvc.perform(multipart("/file/upload")
                         .file(illegalFile)
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400));
     }
 

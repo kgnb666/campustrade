@@ -4,6 +4,8 @@ import '../models/category_model.dart';
 import '../models/goods_model.dart';
 import '../services/goods_service.dart';
 import '../utils/json_cast.dart';
+import '../models/status_enums.dart';
+import '../utils/api_error.dart';
 
 /// 商品业务状态管理控制器
 class GoodsController extends GetxController {
@@ -141,26 +143,30 @@ class GoodsController extends GetxController {
           backgroundColor: Colors.green.shade600,
           colorText: Colors.white);
     } catch (e) {
-      Get.snackbar('删除失败', '$e', snackPosition: SnackPosition.BOTTOM);
+      Get.snackbar('删除失败', describeApiError(e, fallback: '删除商品失败'),
+          snackPosition: SnackPosition.BOTTOM);
     }
   }
 
   /// 切换商品状态 (上架 / 下架)
   Future<void> toggleGoodsStatus(String id, String currentStatus) async {
-    final targetStatus = currentStatus == 'ON_SALE' ? 'OFF_SHELF' : 'ON_SALE';
+    final targetStatus = (GoodsStatus.fromCode(currentStatus)?.isBuyable ?? false)
+        ? GoodsStatus.offShelf.code
+        : GoodsStatus.onSale.code;
     try {
       await _goodsService.updateGoodsStatus(id, targetStatus);
       await loadMyGoods();
       loadGoods(refresh: true);
       Get.snackbar(
         '成功',
-        targetStatus == 'ON_SALE' ? '商品已重新上架' : '商品已下架',
+        GoodsStatus.fromCode(targetStatus)?.isBuyable == true ? '商品已重新上架' : '商品已下架',
         snackPosition: SnackPosition.BOTTOM,
         backgroundColor: Colors.blue.shade600,
         colorText: Colors.white,
       );
     } catch (e) {
-      Get.snackbar('操作失败', '$e', snackPosition: SnackPosition.BOTTOM);
+      Get.snackbar('操作失败', describeApiError(e, fallback: '商品状态修改失败'),
+          snackPosition: SnackPosition.BOTTOM);
     }
   }
 }

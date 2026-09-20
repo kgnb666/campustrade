@@ -159,6 +159,12 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         (currentUserId != null && order.seller?.id == currentUserId) ||
         _orderController.currentRole.value == 'SELLER';
 
+    // 未知状态：只读展示，不渲染任何操作按钮
+    // （服务端不认得的流转，前端更不能给出口子；已知状态的判定全部来自枚举）
+    if (status.isReadOnly) {
+      return null;
+    }
+
     // 终态与评价状态处理
     if (status == OrderStatus.cancelled) {
       return null;
@@ -444,6 +450,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   /// 状态时间线卡片
   Widget _buildTimelineCard(OrderVO order, ThemeData theme) {
     final isCancelled = order.orderStatus == OrderStatus.cancelled;
+    final isUnknown = order.orderStatus.isReadOnly;
 
     return Card(
       elevation: 1.5,
@@ -458,8 +465,14 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                 Icon(
                   isCancelled
                       ? Icons.cancel_outlined
-                      : Icons.timeline_outlined,
-                  color: isCancelled ? Colors.red : theme.colorScheme.primary,
+                      : (isUnknown
+                          ? Icons.help_outline
+                          : Icons.timeline_outlined),
+                  color: isCancelled
+                      ? Colors.red
+                      : (isUnknown
+                          ? Colors.grey
+                          : theme.colorScheme.primary),
                   size: 20,
                 ),
                 const SizedBox(width: 8),
@@ -470,7 +483,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                   ),
                 ),
                 const Spacer(),
-                _buildStatusChip(order.orderStatus, order.statusDescription),
+                _buildStatusChip(order.orderStatus, order.statusText),
               ],
             ),
             const Divider(height: 24),
@@ -478,6 +491,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
             if (isCancelled) ...[
               // 取消流转时间线展示
               _buildCancelledTimeline(order, theme),
+            ] else if (isUnknown) ...[
+              // 未知状态：不渲染任何流转步骤（此前会错误高亮"待卖家确认"）
+              _buildUnknownStatusNotice(order, theme),
             ] else ...[
               // 正常三步时间线展示
               _buildNormalTimeline(order, theme),
@@ -485,6 +501,27 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 未知订单状态提示：只读展示服务端原文，不渲染任何流转步骤或操作入口。
+  ///
+  /// 此前未知状态会被静默回落到"待卖家确认"，于是时间线高亮第一步、卖家还会看到
+  /// "确认接单"按钮——但那是个服务端根本不接受的流转。
+  Widget _buildUnknownStatusNotice(OrderVO order, ThemeData theme) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(Icons.info_outline, size: 18, color: Colors.grey.shade600),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            '当前订单状态为「${order.statusText}」，本版本暂不支持对该状态的展示与操作。'
+            '请稍后刷新，或联系平台客服核实。',
+            style: TextStyle(fontSize: 13, height: 1.5, color: Colors.grey.shade800),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1118,6 +1155,11 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       case OrderStatus.cancelled:
         textColor = Colors.grey.shade700;
         bgColor = Colors.grey.shade200;
+        break;
+      case OrderStatus.unknown:
+        // 未知状态：中性配色，文案为服务端原文（见 OrderVO#statusText）
+        textColor = Colors.grey.shade800;
+        bgColor = Colors.grey.shade100;
         break;
     }
 

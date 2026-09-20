@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import '../models/ai_model.dart';
 import '../models/category_model.dart';
 import '../services/ai_service.dart';
+import '../utils/api_error.dart';
 
 /// DeepSeek AI 商品发布助手底部弹窗
 class AiGoodsAssistantSheet {
@@ -288,13 +289,11 @@ class _AiDescriptionContentState extends State<_AiDescriptionContent> {
       }
     } catch (e) {
       if (mounted) {
-        String msg = e.toString();
-        if (msg.startsWith('Exception: ')) {
-          msg = msg.substring(11);
-        }
-        if (msg.toLowerCase().contains('timeout')) {
-          msg = 'AI 请求超时，请检查网络后重试';
-        }
+        final String msg = describeApiError(
+          e,
+          fallback: 'AI 服务暂不可用，请稍后重试',
+          timeoutMessage: 'AI 请求超时，请检查网络后重试',
+        );
         setState(() {
           _error = msg;
           _loading = false;
@@ -494,13 +493,11 @@ class _AiCategoryContentState extends State<_AiCategoryContent> {
       }
     } catch (e) {
       if (mounted) {
-        String msg = e.toString();
-        if (msg.startsWith('Exception: ')) {
-          msg = msg.substring(11);
-        }
-        if (msg.toLowerCase().contains('timeout')) {
-          msg = 'AI 请求超时，请检查网络后重试';
-        }
+        final String msg = describeApiError(
+          e,
+          fallback: 'AI 服务暂不可用，请稍后重试',
+          timeoutMessage: 'AI 请求超时，请检查网络后重试',
+        );
         setState(() {
           _error = msg;
           _loading = false;
@@ -685,13 +682,11 @@ class _AiPriceContentState extends State<_AiPriceContent> {
       }
     } catch (e) {
       if (mounted) {
-        String msg = e.toString();
-        if (msg.startsWith('Exception: ')) {
-          msg = msg.substring(11);
-        }
-        if (msg.toLowerCase().contains('timeout')) {
-          msg = 'AI 请求超时，请检查网络后重试';
-        }
+        final String msg = describeApiError(
+          e,
+          fallback: 'AI 服务暂不可用，请稍后重试',
+          timeoutMessage: 'AI 请求超时，请检查网络后重试',
+        );
         setState(() {
           _error = msg;
           _loading = false;

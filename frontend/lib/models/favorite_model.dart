@@ -1,3 +1,5 @@
+import 'status_enums.dart';
+
 /// 收藏商品数据模型
 ///
 /// ID 统一用 String 承载：后端 Long 型雪花 ID 以字符串下发，Web 端用 int 会丢精度。
@@ -42,7 +44,7 @@ class FavoriteItemModel {
           ? double.tryParse(json['originalPrice'].toString())
           : null,
       conditionLevel: json['conditionLevel'] ?? '良好',
-      status: json['status'] ?? 'ON_SALE',
+      status: json['status'] ?? GoodsStatus.onSale.code,
       firstImageUrl: json['firstImageUrl'],
       location: json['location'],
       sellerId: json['sellerId']?.toString(),

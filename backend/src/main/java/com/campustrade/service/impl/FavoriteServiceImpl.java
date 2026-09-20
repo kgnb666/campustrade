@@ -1,5 +1,6 @@
 package com.campustrade.service.impl;
 
+import com.campustrade.enums.GoodsStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -57,7 +58,7 @@ public class FavoriteServiceImpl implements FavoriteService {
             throw new BusinessException(404, "商品不存在或已被删除");
         }
         Goods goods = goodsMapper.selectById(goodsId);
-        if (goods == null || "OFF_SHELF".equalsIgnoreCase(goods.getStatus())) {
+        if (goods == null || GoodsStatus.OFF_SHELF.matches(goods.getStatus())) {
             throw new BusinessException(404, "商品不存在或已被删除");
         }
 

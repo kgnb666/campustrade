@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+import com.campustrade.common.constant.CreditRule;
 
 /**
  * 用户信用档案 Mapper 接口
@@ -29,7 +30,8 @@ public interface UserCreditMapper extends BaseMapper<UserCredit> {
     @Insert("INSERT INTO campus_trade.user_credit " +
             "(id, user_id, credit_score, credit_level, trade_count, good_review_count, bad_review_count, " +
             " completed_count, cancel_count, created_time, updated_time) " +
-            "VALUES (#{id}, #{userId}, 100, 'GOOD', 0, 0, 0, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) " +
+            "VALUES (#{id}, #{userId}, " + CreditRule.SCORE_DEFAULT + ", 'GOOD', 0, 0, 0, 0, 0, " +
+            "CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) " +
             "ON CONFLICT (user_id) DO NOTHING")
     int insertCreditIfAbsent(@Param("id") Long id, @Param("userId") Long userId);
 
@@ -44,7 +46,8 @@ public interface UserCreditMapper extends BaseMapper<UserCredit> {
      * 原子增减用户信用积分与统计计数 (数据库物理行级锁更新，杜绝并发更新丢失)
      */
     @Update("UPDATE campus_trade.user_credit " +
-            "SET credit_score = LEAST(200, GREATEST(0, credit_score + #{delta})), " +
+            "SET credit_score = LEAST(" + CreditRule.SCORE_MAX + ", GREATEST(" + CreditRule.SCORE_MIN
+            + ", credit_score + #{delta})), " +
             "    credit_level = #{level}, " +
             "    completed_count = completed_count + #{completedDelta}, " +
             "    cancel_count = cancel_count + #{cancelDelta}, " +

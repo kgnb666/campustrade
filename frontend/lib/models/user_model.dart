@@ -1,3 +1,5 @@
+import 'status_enums.dart';
+
 /// 用户信用档案模型
 class UserCreditModel {
   final int creditScore;
@@ -112,7 +114,7 @@ class UserProfileModel {
     this.credit,
   });
 
-  bool get isVerified => verifyStatus == 'SUCCESS';
+  bool get isVerified => VerifyStatus.fromCode(verifyStatus).isVerified;
 
   factory UserProfileModel.fromJson(Map<String, dynamic> json) {
     return UserProfileModel(

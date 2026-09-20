@@ -11,6 +11,7 @@ import lombok.NoArgsConstructor;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
+import com.campustrade.common.constant.CreditRule;
 
 /**
  * 用户信用档案持久化实体
@@ -29,11 +30,11 @@ public class UserCredit implements Serializable {
     private Long userId;
 
     /**
-     * 初始信用分，默认 100 (合法区间 0 ~ 200)
+     * 信用分（初始值与合法区间都来自 {@link CreditRule}：0 ~ 200，初始 100）。
      */
     @Builder.Default
     @TableField("credit_score")
-    private Integer creditScore = 100;
+    private Integer creditScore = CreditRule.SCORE_DEFAULT;
 
     @Builder.Default
     @TableField("trade_count")

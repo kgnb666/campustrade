@@ -21,17 +21,11 @@ public interface ReviewService {
     ReviewVO createReview(Long currentUserId, CreateReviewRequest request);
 
     /**
-     * 分页查询用户收到的公开评价
-     *
-     * @param userId 目标用户ID
-     * @param page   页码 (>= 1)
-     * @param size   每页大小 (1 ~ 50)
-     * @return 分页结果
-     */
-    IPage<ReviewVO> getReviewsByUser(Long userId, Integer page, Integer size);
-
-    /**
      * 分页查询用户收到的公开评价 (支持传入当前查看人进行点赞态关联)
+     *
+     * <p>只保留这一个重载：当前查看人由调用方（Controller）显式传入，服务层不从
+     * {@code SecurityContext} 隐式取值——隐式取值会派生出一个"看起来等价、实则行为不同"
+     * 的重载（无登录态时静默为 null），两套入口并存只会让调用方误选。</p>
      *
      * @param userId        目标用户ID
      * @param page          页码 (>= 1)
@@ -42,17 +36,9 @@ public interface ReviewService {
     IPage<ReviewVO> getReviewsByUser(Long userId, Integer page, Integer size, Long currentUserId);
 
     /**
-     * 分页查询商品收到的公开评价
-     *
-     * @param goodsId 目标商品ID
-     * @param page    页码 (>= 1)
-     * @param size    每页大小 (1 ~ 50)
-     * @return 分页结果
-     */
-    IPage<ReviewVO> getReviewsByGoods(Long goodsId, Integer page, Integer size);
-
-    /**
      * 分页查询商品收到的公开评价 (支持传入当前查看人进行点赞态关联)
+     *
+     * <p>重载收敛理由同 {@link #getReviewsByUser(Long, Integer, Integer, Long)}。</p>
      *
      * @param goodsId       目标商品ID
      * @param page          页码 (>= 1)

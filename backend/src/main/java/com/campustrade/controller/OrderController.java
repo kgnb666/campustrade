@@ -8,18 +8,23 @@ import com.campustrade.dto.order.CreateOrderRequest;
 import com.campustrade.dto.order.OrderQueryRequest;
 import com.campustrade.entity.TradeOrder;
 import com.campustrade.entity.User;
-import com.campustrade.exception.OrderBusinessException;
 import com.campustrade.service.OrderService;
 import com.campustrade.vo.order.OrderVO;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.*;
 
 /**
  * 交易订单核心 REST API 控制器
  * 提供创建订单、我的订单分页、订单详情、卖家确认、取消订单及完成面交交易等闭环接口
+ *
+ * <h2>为什么这里不再有 try/catch</h2>
+ * <p>服务层抛出的 {@code OrderBusinessException(403, ...)} 由 {@code GlobalExceptionHandler}
+ * 按其业务码映射为真实 HTTP 403（映射表唯一存在于 {@code BusinessException#httpStatus()}），
+ * 因此"把服务层 403 补成真 403"的 catch + rethrow 只剩副作用：它重复了状态码映射，
+ * 还把原始业务文案（如"只有卖家可以确认订单"）替换成泛化的"权限不足，拒绝访问"。
+ * 所有接口的错误语义统一由全局处理器产出。</p>
  */
 @Slf4j
 @RestController
@@ -68,15 +73,8 @@ public class OrderController {
      */
     @GetMapping("/{id}")
     public Result<OrderVO> getOrderDetail(@CurrentUser User user, @PathVariable("id") Long id) {
-        try {
-            OrderVO vo = orderService.getOrderDetail(id, user.getId());
-            return Result.success("获取订单详情成功", vo);
-        } catch (OrderBusinessException e) {
-            if (e.getCode() == 403) {
-                throw new AccessDeniedException(e.getMessage());
-            }
-            throw e;
-        }
+        OrderVO vo = orderService.getOrderDetail(id, user.getId());
+        return Result.success("获取订单详情成功", vo);
     }
 
     /**
@@ -86,16 +84,9 @@ public class OrderController {
      */
     @PutMapping("/{id}/confirm")
     public Result<OrderVO> confirmOrder(@CurrentUser User user, @PathVariable("id") Long id) {
-        try {
-            TradeOrder order = orderService.confirmOrder(id, user.getId());
-            OrderVO vo = orderService.convertToVO(order);
-            return Result.success("卖家确认接单成功", vo);
-        } catch (OrderBusinessException e) {
-            if (e.getCode() == 403) {
-                throw new AccessDeniedException(e.getMessage());
-            }
-            throw e;
-        }
+        TradeOrder order = orderService.confirmOrder(id, user.getId());
+        OrderVO vo = orderService.convertToVO(order);
+        return Result.success("卖家确认接单成功", vo);
     }
 
     /**
@@ -108,16 +99,9 @@ public class OrderController {
     public Result<OrderVO> cancelOrder(@CurrentUser User user,
                                        @PathVariable("id") Long id,
                                        @Valid @RequestBody CancelOrderRequest request) {
-        try {
-            TradeOrder order = orderService.cancelOrder(id, user.getId(), request.getCancelReason());
-            OrderVO vo = orderService.convertToVO(order);
-            return Result.success("订单取消成功", vo);
-        } catch (OrderBusinessException e) {
-            if (e.getCode() == 403) {
-                throw new AccessDeniedException(e.getMessage());
-            }
-            throw e;
-        }
+        TradeOrder order = orderService.cancelOrder(id, user.getId(), request.getCancelReason());
+        OrderVO vo = orderService.convertToVO(order);
+        return Result.success("订单取消成功", vo);
     }
 
     /**
@@ -127,15 +111,8 @@ public class OrderController {
      */
     @PutMapping("/{id}/complete")
     public Result<OrderVO> completeOrder(@CurrentUser User user, @PathVariable("id") Long id) {
-        try {
-            TradeOrder order = orderService.completeOrder(id, user.getId());
-            OrderVO vo = orderService.convertToVO(order);
-            return Result.success("交易完成", vo);
-        } catch (OrderBusinessException e) {
-            if (e.getCode() == 403) {
-                throw new AccessDeniedException(e.getMessage());
-            }
-            throw e;
-        }
+        TradeOrder order = orderService.completeOrder(id, user.getId());
+        OrderVO vo = orderService.convertToVO(order);
+        return Result.success("交易完成", vo);
     }
 }

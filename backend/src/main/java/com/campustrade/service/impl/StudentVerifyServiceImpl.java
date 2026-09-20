@@ -1,7 +1,6 @@
 package com.campustrade.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.campustrade.common.Result;
 import com.campustrade.common.ResultCode;
 import com.campustrade.common.constant.RedisKeyConstants;
 import com.campustrade.config.VerifyProperties;
@@ -56,15 +55,9 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
     private final VerifyProperties verifyProperties;
     private final VerifyCodeMailSender verifyCodeMailSender;
 
-    /** 验证码 Redis 键前缀，与 {@link RedisKeyConstants#STUDENT_VERIFY_PREFIX} 一致。 */
-    public static final String VERIFY_CODE_PREFIX = RedisKeyConstants.STUDENT_VERIFY_PREFIX;
-
-    /** 下发成功后的统一提示：不含任何验证码信息（响应 data 恒为 null）。 */
-    public static final String VERIFY_CODE_SENT_MESSAGE = "验证码已发送至校园邮箱（5分钟内有效）";
-
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Result<Void> submitVerify(String username, StudentVerifyDTO dto) {
+    public void submitVerify(String username, StudentVerifyDTO dto) {
         // 1. 获取当前用户
         User user = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getUsername, username)
@@ -143,14 +136,11 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
         // 这里只记录掩码后的校园邮箱、TTL 与用户 ID，足够定位问题但不含任何凭据信息。
         log.info("校园认证验证码已生成并下发: email={}, ttlMinutes={}, userId={}",
                 VerifyCodeMailSender.maskEmail(email), codeTtlMinutes, user.getId());
-
-        // 响应不再携带验证码：data 恒为 null，前端必须走"查收邮件/查看本地日志"的正规路径
-        return Result.success(VERIFY_CODE_SENT_MESSAGE, null);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Result<Void> verifyCode(String username, StudentVerifyCodeDTO dto) {
+    public void verifyCode(String username, StudentVerifyCodeDTO dto) {
         User user = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getUsername, username)
         );
@@ -197,8 +187,6 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
         stringRedisTemplate.delete(failKey);
         log.info("用户校园认证成功: userId={}, username={}, schoolEmail={}",
                 user.getId(), username, VerifyCodeMailSender.maskEmail(email));
-
-        return Result.success("校园身份认证成功！已为您点亮高校专属认证标识", null);
     }
 
     // =========================================================================

@@ -89,4 +89,26 @@ public interface CreditService {
             String reason,
             String actionKey
     );
+
+    /**
+     * 按<b>有符号幅度</b>调整信用积分：正数加分、负数扣分、0 不产生任何变动与流水。
+     *
+     * <p>本方法是 {@code CreditRule} 定义的规则与信用领域之间的唯一接入口：
+     * 规则类给出"应当变动多少"（可为负），本方法负责把方向落到加/扣两条既有实现上，
+     * 因此调用方不需要再写 {@code if (delta > 0) addCredit else deductCredit} 这类分支
+     * —— 那正是三处评价信用路径此前各自实现一遍、并且容易写反的地方。</p>
+     *
+     * <p>幂等键、区间截断与审计流水语义与 {@link #addCredit} / {@link #deductCredit} 完全一致。</p>
+     *
+     * @param delta 有符号变动幅度（正=加分，负=扣分，0=不变）
+     */
+    UserCredit applyDelta(
+            Long userId,
+            Integer delta,
+            CreditChangeType type,
+            String relatedType,
+            Long relatedId,
+            String reason,
+            String actionKey
+    );
 }

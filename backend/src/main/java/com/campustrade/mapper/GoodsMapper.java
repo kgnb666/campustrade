@@ -2,9 +2,11 @@ package com.campustrade.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.campustrade.entity.Goods;
+import com.campustrade.enums.GoodsStatus;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Update;
+import org.apache.ibatis.annotations.UpdateProvider;
 
 /**
  * 商品 Mapper
@@ -14,6 +16,11 @@ import org.apache.ibatis.annotations.Update;
  * 都会被拼进 SET 子句。于是"selectById 读整行 → 改一个字段 → updateById 写回"会隐式地把读取时刻的
  * 其余字段（status / view_count / price ...）一起写回，覆盖其他事务在此期间已经提交的修改。
  * 因此本表的状态跃迁与计数累加一律下沉为带前置条件的单条 UPDATE，并让调用方校验受影响行数。
+ *
+ * <h2>为什么状态类 SQL 走 {@link GoodsSqlProvider}</h2>
+ * 涉及 {@code status} 的语句不再在注解里写状态字面量：注解 SQL 必须是编译期常量，无法引用枚举，
+ * 硬写字面量会让 {@link GoodsStatus} 失去"唯一真相源"的地位。改为 SQL Provider 后，
+ * 所有状态取值都来自 {@link GoodsStatus#getCode()}。
  */
 @Mapper
 public interface GoodsMapper extends BaseMapper<Goods> {
@@ -33,8 +40,7 @@ public interface GoodsMapper extends BaseMapper<Goods> {
      *
      * @return 受影响行数：1 = 锁定成功；0 = 商品已不在售（被他人锁定/售出/下架）
      */
-    @Update("UPDATE campus_trade.goods SET status = 'LOCKED', updated_time = CURRENT_TIMESTAMP " +
-            "WHERE id = #{goodsId} AND status = 'ON_SALE'")
+    @UpdateProvider(type = GoodsSqlProvider.class, method = "lockForOrder")
     int lockForOrder(@Param("goodsId") Long goodsId);
 
     /**
@@ -42,8 +48,7 @@ public interface GoodsMapper extends BaseMapper<Goods> {
      *
      * @return 受影响行数：1 = 已恢复；0 = 商品状态已不是 LOCKED
      */
-    @Update("UPDATE campus_trade.goods SET status = 'ON_SALE', updated_time = CURRENT_TIMESTAMP " +
-            "WHERE id = #{goodsId} AND status = 'LOCKED'")
+    @UpdateProvider(type = GoodsSqlProvider.class, method = "restoreToOnSale")
     int restoreToOnSale(@Param("goodsId") Long goodsId);
 
     /**
@@ -51,8 +56,7 @@ public interface GoodsMapper extends BaseMapper<Goods> {
      *
      * @return 受影响行数：1 = 已置为 SOLD；0 = 商品状态已不是 LOCKED
      */
-    @Update("UPDATE campus_trade.goods SET status = 'SOLD', updated_time = CURRENT_TIMESTAMP " +
-            "WHERE id = #{goodsId} AND status = 'LOCKED'")
+    @UpdateProvider(type = GoodsSqlProvider.class, method = "markSold")
     int markSold(@Param("goodsId") Long goodsId);
 
     /**
@@ -60,8 +64,7 @@ public interface GoodsMapper extends BaseMapper<Goods> {
      *
      * @return 受影响行数：1 = 已变更；0 = 商品已锁单/售出（或不存在）
      */
-    @Update("UPDATE campus_trade.goods SET status = #{status}, updated_time = CURRENT_TIMESTAMP " +
-            "WHERE id = #{goodsId} AND status NOT IN ('LOCKED', 'SOLD')")
+    @UpdateProvider(type = GoodsSqlProvider.class, method = "offShelfForSeller")
     int updateStatusIfTradable(@Param("goodsId") Long goodsId, @Param("status") String status);
 
     /**
@@ -70,7 +73,6 @@ public interface GoodsMapper extends BaseMapper<Goods> {
      *
      * @return 受影响行数：1 = 已下架；0 = 商品已是 OFF_SHELF（或不存在）
      */
-    @Update("UPDATE campus_trade.goods SET status = 'OFF_SHELF', updated_time = CURRENT_TIMESTAMP " +
-            "WHERE id = #{goodsId} AND status <> 'OFF_SHELF'")
+    @UpdateProvider(type = GoodsSqlProvider.class, method = "offShelfForGovernance")
     int offShelfForGovernance(@Param("goodsId") Long goodsId);
 }

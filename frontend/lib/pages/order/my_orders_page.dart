@@ -239,7 +239,7 @@ class _MyOrdersPageState extends State<MyOrdersPage>
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  _buildStatusBadge(order.orderStatus, order.statusDescription),
+                  _buildStatusBadge(order.orderStatus, order.statusText),
                 ],
               ),
               const Divider(height: 18),
@@ -382,6 +382,11 @@ class _MyOrdersPageState extends State<MyOrdersPage>
       case OrderStatus.cancelled:
         textColor = Colors.grey.shade700;
         bgColor = Colors.grey.shade200;
+        break;
+      case OrderStatus.unknown:
+        // 未知状态：中性配色 + 服务端原文，不借用任何已知状态的视觉语义
+        textColor = Colors.grey.shade800;
+        bgColor = Colors.grey.shade100;
         break;
     }
 

@@ -3,6 +3,9 @@
 library;
 
 /// 订单生命周期状态枚举
+///
+/// 与后端 `OrderStatus`（V10 CHECK 约束：WAIT_SELLER_CONFIRM / WAIT_MEET /
+/// COMPLETED / CANCELLED）一一对应。
 enum OrderStatus {
   /// 待卖家确认接单
   waitSellerConfirm('WAIT_SELLER_CONFIRM', '待卖家确认'),
@@ -14,23 +17,40 @@ enum OrderStatus {
   completed('COMPLETED', '已完成'),
 
   /// 交易取消
-  cancelled('CANCELLED', '已取消');
+  cancelled('CANCELLED', '已取消'),
+
+  /// 后端新增/前端尚未识别的状态
+  ///
+  /// 刻意<b>不</b>回落成某个已知状态：把未知状态显示成「待卖家确认」不仅文案是错的，
+  /// 还会因为 isWaitSellerConfirm 为真而给出「确认接单」「取消订单」等可点击操作，
+  /// 让用户在服务端根本不接受该流转的订单上误操作。未知状态一律只读展示服务端原文。
+  unknown('', '未知状态');
 
   final String code;
   final String label;
 
   const OrderStatus(this.code, this.label);
 
-  /// 根据字符串编码转换为枚举，未知或空时安全回退为 waitSellerConfirm
+  /// 是否为前端已识别的状态。
+  bool get isKnown => this != OrderStatus.unknown;
+
+  /// 是否只读（未知状态不提供任何操作入口）。
+  bool get isReadOnly => !isKnown;
+
+  /// 根据字符串编码转换为枚举。
+  ///
+  /// 已知编码（大小写不敏感、容忍首尾空白）→ 对应枚举；
+  /// null / 空串 / 未知编码 → [OrderStatus.unknown]（只读原文展示，不再静默回落）。
   static OrderStatus fromCode(String? code) {
-    if (code == null) return OrderStatus.waitSellerConfirm;
+    if (code == null) return OrderStatus.unknown;
     final upper = code.trim().toUpperCase();
+    if (upper.isEmpty) return OrderStatus.unknown;
     for (final status in OrderStatus.values) {
-      if (status.code == upper) {
+      if (status.isKnown && status.code == upper) {
         return status;
       }
     }
-    return OrderStatus.waitSellerConfirm;
+    return OrderStatus.unknown;
   }
 }
 
@@ -83,6 +103,10 @@ class OrderVO {
   final String? buyerMessage;
   final String? sellerReply;
   final OrderStatus orderStatus;
+
+  /// 服务端下发的原始状态码（未知状态时用于原文展示，保证提示不丢信息）。
+  final String statusCode;
+
   final String statusDescription;
   final String? cancelReason;
   final String? cancelledBy;
@@ -107,6 +131,7 @@ class OrderVO {
     this.buyerMessage,
     this.sellerReply,
     required this.orderStatus,
+    String? statusCode,
     required this.statusDescription,
     this.cancelReason,
     this.cancelledBy,
@@ -115,21 +140,47 @@ class OrderVO {
     this.completedTime,
     this.cancelledTime,
     this.updatedTime,
-  });
+  }) : statusCode = statusCode ?? orderStatus.code;
 
-  /// 状态快捷判断属性
+  /// 状态快捷判断属性（未知状态对所有已知判定恒为 false）
+  bool get isKnownStatus => orderStatus.isKnown;
+  bool get isUnknownStatus => orderStatus.isReadOnly;
   bool get isWaitSellerConfirm => orderStatus == OrderStatus.waitSellerConfirm;
   bool get isWaitMeet => orderStatus == OrderStatus.waitMeet;
   bool get isCompleted => orderStatus == OrderStatus.completed;
   bool get isCancelled => orderStatus == OrderStatus.cancelled;
 
-  /// 操作权限/流转可用性
-  bool get canCancel => isWaitSellerConfirm || isWaitMeet;
-  bool get canConfirm => isWaitSellerConfirm;
-  bool get canComplete => isWaitMeet;
+  /// 操作权限/流转可用性。
+  ///
+  /// 未知状态一律不可操作（三个 can* 全为 false），确保 UI 不会在无法识别的订单上渲染按钮。
+  bool get canCancel => isKnownStatus && (isWaitSellerConfirm || isWaitMeet);
+  bool get canConfirm => isKnownStatus && isWaitSellerConfirm;
+  bool get canComplete => isKnownStatus && isWaitMeet;
+
+  /// 用于展示的状态文案。
+  ///
+  /// 优先使用服务端下发的 `statusDescription`；缺失或为空时，已知状态用枚举 label，
+  /// 未知状态<b>直接展示服务端原文</b>（而不是伪装成某个已知状态的文案）。
+  String get statusText {
+    final described = statusDescription.trim();
+    if (described.isNotEmpty) {
+      return described;
+    }
+    return defaultStatusLabel(orderStatus, statusCode);
+  }
+
+  /// 状态文案兜底：已知状态用枚举 label，未知状态用服务端原始状态码。
+  static String defaultStatusLabel(OrderStatus status, String rawStatusCode) {
+    if (status.isKnown) {
+      return status.label;
+    }
+    final raw = rawStatusCode.trim();
+    return raw.isEmpty ? status.label : raw;
+  }
 
   factory OrderVO.fromJson(Map<String, dynamic> json) {
-    final status = OrderStatus.fromCode(json['orderStatus']?.toString());
+    final rawStatusCode = json['orderStatus']?.toString() ?? '';
+    final status = OrderStatus.fromCode(rawStatusCode);
 
     // 解析买家信息 (优先嵌套 buyer 对象，次选平铺字段)
     OrderUserInfo? buyerObj;
@@ -184,9 +235,11 @@ class OrderVO {
       buyerMessage: json['buyerMessage']?.toString(),
       sellerReply: json['sellerReply']?.toString(),
       orderStatus: status,
+      // 服务端原始状态码：未知状态时它就是唯一可信的展示内容，不能被枚举的 label 覆盖
+      statusCode: rawStatusCode.isNotEmpty ? rawStatusCode : status.code,
       statusDescription: json['statusDescription']?.toString() ??
           json['statusDesc']?.toString() ??
-          status.label,
+          defaultStatusLabel(status, rawStatusCode),
       cancelReason: json['cancelReason']?.toString(),
       cancelledBy: json['cancelledBy']?.toString(),
       createdTime: json['createdTime']?.toString(),
@@ -212,7 +265,8 @@ class OrderVO {
         if (meetLocation != null) 'meetLocation': meetLocation,
         if (buyerMessage != null) 'buyerMessage': buyerMessage,
         if (sellerReply != null) 'sellerReply': sellerReply,
-        'orderStatus': orderStatus.code,
+        // 保留服务端原始状态码：未知状态经此序列化不会退化成空串
+        'orderStatus': statusCode,
         'statusDescription': statusDescription,
         'statusDesc': statusDescription,
         if (cancelReason != null) 'cancelReason': cancelReason,
@@ -239,6 +293,7 @@ class OrderVO {
     String? buyerMessage,
     String? sellerReply,
     OrderStatus? orderStatus,
+    String? statusCode,
     String? statusDescription,
     String? cancelReason,
     String? cancelledBy,
@@ -263,6 +318,7 @@ class OrderVO {
       buyerMessage: buyerMessage ?? this.buyerMessage,
       sellerReply: sellerReply ?? this.sellerReply,
       orderStatus: orderStatus ?? this.orderStatus,
+      statusCode: statusCode ?? this.statusCode,
       statusDescription: statusDescription ?? this.statusDescription,
       cancelReason: cancelReason ?? this.cancelReason,
       cancelledBy: cancelledBy ?? this.cancelledBy,

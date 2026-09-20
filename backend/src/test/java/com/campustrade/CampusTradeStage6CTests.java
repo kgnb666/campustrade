@@ -309,7 +309,7 @@ class CampusTradeStage6CTests {
     void test03_non_existent_review_returns_404() throws Exception {
         mockMvc.perform(post("/api/reviews/99999999/like")
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
     }
 
@@ -321,7 +321,7 @@ class CampusTradeStage6CTests {
 
         mockMvc.perform(post("/api/reviews/" + review.getId() + "/like")
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("禁止对自己发表的评价点赞"));
     }
@@ -366,7 +366,7 @@ class CampusTradeStage6CTests {
         // 第二次重复点赞
         mockMvc.perform(post("/api/reviews/" + review.getId() + "/like")
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value(409));
 
         // 验证 count 仍然为 1
@@ -436,7 +436,7 @@ class CampusTradeStage6CTests {
 
         mockMvc.perform(post("/api/reviews/" + review.getId() + "/like")
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value(422));
 
         Review dbReview = reviewMapper.selectById(review.getId());
@@ -806,7 +806,7 @@ class CampusTradeStage6CTests {
                         .header("Authorization", "Bearer " + tokenAdmin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"测试\"}"))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
     }
 
@@ -820,7 +820,7 @@ class CampusTradeStage6CTests {
                         .header("Authorization", "Bearer " + tokenAdmin)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"reason\":\"重复恢复\"}"))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("评价当前处于正常展示状态，无需重复恢复"));
     }
@@ -997,7 +997,7 @@ class CampusTradeStage6CTests {
         // 屏蔽态下点赞失败 (422)
         mockMvc.perform(post("/api/reviews/" + review.getId() + "/like")
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value(422));
 
         // 管理员执行恢复

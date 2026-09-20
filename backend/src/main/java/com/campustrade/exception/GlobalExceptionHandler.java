@@ -5,6 +5,7 @@ import com.campustrade.common.ResultCode;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.AuthenticationException;
@@ -20,18 +21,25 @@ import java.util.stream.Collectors;
 
 /**
  * 全局异常统一捕获处理器
+ *
+ * <h2>响应体不变，HTTP 状态码对齐语义</h2>
+ * <p>所有分支的响应体始终是 {@code {code,message,data,timestamp}}（见 {@link Result}），
+ * 不做任何字段增删。变化只发生在 HTTP 状态行：业务异常不再一律以 200 返回，
+ * 而是按业务码映射为同名 HTTP 状态（映射表唯一存在于 {@link BusinessException#httpStatus()}），
+ * 与鉴权层异常的 401/403、未匹配路径的 404 在传输层保持一致。</p>
  */
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     /**
-     * 处理业务异常
+     * 处理业务异常：HTTP 状态码由业务码映射而来，响应体结构保持不变。
      */
     @ExceptionHandler(BusinessException.class)
-    public Result<Void> handleBusinessException(BusinessException e) {
-        log.warn("业务异常: code={}, message={}", e.getCode(), e.getMessage());
-        return Result.error(e.getCode(), e.getMessage());
+    public ResponseEntity<Result<Void>> handleBusinessException(BusinessException e) {
+        HttpStatus status = e.httpStatus();
+        log.warn("业务异常: code={}, httpStatus={}, message={}", e.getCode(), status.value(), e.getMessage());
+        return ResponseEntity.status(status).body(Result.error(e.getCode(), e.getMessage()));
     }
 
     /**
@@ -164,7 +172,39 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 处理未匹配到任何处理器/静态资源的请求路径（404）。
+     *
+     * <p>{@code NoResourceFoundException} 由 Spring 6.1 的静态资源处理器在"路径没有任何映射"
+     * 时抛出（本项目 {@code spring.web.resources.add-mappings} 保持默认开启，因此未匹配路径
+     * 走的是资源处理器而不是"无 handler"分支）。此前它会落到下面的兜底 {@code Exception} 分支，
+     * 把"请求了一个不存在的接口"伪装成 500「系统繁忙」，误导排查方向。</p>
+     */
+    @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public Result<Void> handleNoResourceFoundException(org.springframework.web.servlet.resource.NoResourceFoundException e) {
+        log.warn("请求路径不存在: {}", e.getResourcePath());
+        return Result.error(ResultCode.NOT_FOUND.getCode(), "请求的资源不存在: " + e.getResourcePath());
+    }
+
+    /**
+     * 处理未匹配到任何处理器的请求路径（404）。
+     *
+     * <p>当 {@code spring.mvc.throw-exception-if-no-handler-found=true} 生效时，
+     * 未匹配路径抛出的正是本异常（与上一条互为兜底，二者都必须存在）。</p>
+     */
+    @ExceptionHandler(org.springframework.web.servlet.NoHandlerFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public Result<Void> handleNoHandlerFoundException(org.springframework.web.servlet.NoHandlerFoundException e) {
+        log.warn("未找到处理器: {} {}", e.getHttpMethod(), e.getRequestURL());
+        return Result.error(ResultCode.NOT_FOUND.getCode(), "请求的资源不存在: " + e.getRequestURL());
+    }
+
+    /**
      * 处理未捕获的系统全局异常 (防止向前端泄露数据库敏感异常信息)
+     *
+     * <p>兜底分支只承接真正的服务端故障：{@code NoResourceFoundException} /
+     * {@code NoHandlerFoundException} 已由上方的专用分支接管（Spring 按异常类型取最精确匹配，
+     * 二者不会落到这里），因此"路径不存在"不会再被伪装成 500。</p>
      */
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)

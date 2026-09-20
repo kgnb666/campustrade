@@ -1,5 +1,6 @@
 package com.campustrade.service.impl;
 
+import com.campustrade.enums.GoodsStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
@@ -32,6 +33,7 @@ import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import com.campustrade.common.constant.CreditRule;
 
 /**
  * 商品核心服务实现类
@@ -103,7 +105,7 @@ public class GoodsServiceImpl implements GoodsService {
                 .price(dto.getPrice())
                 .originalPrice(dto.getOriginalPrice())
                 .conditionLevel(dto.getConditionLevel())
-                .status("ON_SALE")
+                .status(GoodsStatus.ON_SALE.getCode())
                 .location(dto.getLocation())
                 .viewCount(0)
                 .createdTime(now)
@@ -152,7 +154,7 @@ public class GoodsServiceImpl implements GoodsService {
         LambdaQueryWrapper<Goods> wrapper = new LambdaQueryWrapper<>();
 
         // 默认公开列表只展示在售商品
-        wrapper.eq(Goods::getStatus, "ON_SALE");
+        wrapper.eq(Goods::getStatus, GoodsStatus.ON_SALE.getCode());
 
         // 关键词检索 (标题或描述)
         if (StringUtils.hasText(queryDTO.getKeyword())) {
@@ -298,7 +300,8 @@ public class GoodsServiceImpl implements GoodsService {
         UserCredit sellerCredit = userCreditMapper.selectOne(
                 new LambdaQueryWrapper<UserCredit>().eq(UserCredit::getUserId, goods.getSellerId())
         );
-        int creditScore = (sellerCredit != null) ? sellerCredit.getCreditScore() : 100;
+        int creditScore = (sellerCredit != null)
+                ? sellerCredit.getCreditScore() : CreditRule.SCORE_DEFAULT;
         int tradeCount = (sellerCredit != null) ? sellerCredit.getTradeCount() : 0;
         int goodReviewCount = (sellerCredit != null) ? sellerCredit.getGoodReviewCount() : 0;
 
@@ -349,7 +352,7 @@ public class GoodsServiceImpl implements GoodsService {
         }
 
         // 状态守卫: 交易中(LOCKED)或已售出(SOLD)商品禁止修改
-        if ("LOCKED".equalsIgnoreCase(goods.getStatus()) || "SOLD".equalsIgnoreCase(goods.getStatus())) {
+        if (GoodsStatus.LOCKED.matches(goods.getStatus()) || GoodsStatus.SOLD.matches(goods.getStatus())) {
             throw new BusinessException(400, "商品处于交易中或已售出，禁止修改或删除");
         }
 
@@ -359,7 +362,7 @@ public class GoodsServiceImpl implements GoodsService {
         LambdaUpdateWrapper<Goods> updateWrapper = new LambdaUpdateWrapper<Goods>()
                 .eq(Goods::getId, id)
                 // 条件前置：编辑期间若商品被并发锁单/售出，本次更新必须整体失败
-                .notIn(Goods::getStatus, "LOCKED", "SOLD")
+                .notIn(Goods::getStatus, GoodsStatus.LOCKED.getCode(), GoodsStatus.SOLD.getCode())
                 .set(Goods::getUpdatedTime, LocalDateTime.now());
 
         if (StringUtils.hasText(dto.getTitle())) {
@@ -438,12 +441,12 @@ public class GoodsServiceImpl implements GoodsService {
         }
 
         // 状态守卫: 交易中(LOCKED)或已售出(SOLD)商品禁止删除
-        if ("LOCKED".equalsIgnoreCase(goods.getStatus()) || "SOLD".equalsIgnoreCase(goods.getStatus())) {
+        if (GoodsStatus.LOCKED.matches(goods.getStatus()) || GoodsStatus.SOLD.matches(goods.getStatus())) {
             throw new BusinessException(400, "商品处于交易中或已售出，禁止修改或删除");
         }
 
         // 逻辑删除: 状态变更为 OFF_SHELF（定点更新 + 前置条件，避免整行回写覆盖并发状态）
-        int affected = goodsMapper.updateStatusIfTradable(id, "OFF_SHELF");
+        int affected = goodsMapper.updateStatusIfTradable(id, GoodsStatus.OFF_SHELF.getCode());
         if (affected <= 0) {
             throw goodsStatusConflict(id, "下架");
         }
@@ -464,19 +467,23 @@ public class GoodsServiceImpl implements GoodsService {
         }
 
         // 状态守卫: 交易中(LOCKED)禁止变更状态，已售出(SOLD)禁止变更状态
-        if ("LOCKED".equalsIgnoreCase(goods.getStatus())) {
+        if (GoodsStatus.LOCKED.matches(goods.getStatus())) {
             throw new BusinessException(400, "商品处于交易锁定中，禁止变更上下架状态");
         }
-        if ("SOLD".equalsIgnoreCase(goods.getStatus())) {
+        if (GoodsStatus.SOLD.matches(goods.getStatus())) {
             throw new BusinessException(400, "商品已售出，禁止变更状态");
         }
 
-        if (!"ON_SALE".equalsIgnoreCase(status) && !"OFF_SHELF".equalsIgnoreCase(status)) {
-            throw new BusinessException(400, "仅支持修改为 ON_SALE (上架) 或 OFF_SHELF (下架) 状态");
+        // 入参只接受 ON_SALE / OFF_SHELF 两种跃迁目标，其余取值（含 DRAFT/LOCKED/SOLD）一律拒绝
+        GoodsStatus requestedStatus = GoodsStatus.fromCode(status);
+        if (requestedStatus != GoodsStatus.ON_SALE && requestedStatus != GoodsStatus.OFF_SHELF) {
+            throw new BusinessException(400, "仅支持修改为 "
+                    + GoodsStatus.ON_SALE.getCode() + " (上架) 或 "
+                    + GoodsStatus.OFF_SHELF.getCode() + " (下架) 状态");
         }
 
         // 定点更新 + 前置条件：仅当商品既非交易中(LOCKED)也非已售出(SOLD)时才允许上下架
-        String targetStatus = status.toUpperCase();
+        String targetStatus = requestedStatus.getCode();
         int affected = goodsMapper.updateStatusIfTradable(id, targetStatus);
         if (affected <= 0) {
             throw goodsStatusConflict(id, "变更上下架状态");

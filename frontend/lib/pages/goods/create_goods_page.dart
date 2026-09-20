@@ -6,6 +6,8 @@ import '../../models/category_model.dart';
 import '../../routes/app_routes.dart';
 import '../../services/goods_service.dart';
 import '../../widgets/ai_goods_assistant_sheet.dart';
+import '../../models/status_enums.dart';
+import '../../utils/api_error.dart';
 
 /// 发布闲置商品页面
 class CreateGoodsPage extends StatefulWidget {
@@ -61,7 +63,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
   void _checkStudentVerification() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final user = _authController.currentUser.value;
-      if (user == null || user.verifyStatus != 'SUCCESS') {
+      if (user == null || !VerifyStatus.fromCode(user.verifyStatus).isVerified) {
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -185,7 +187,8 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
           backgroundColor: Colors.green.shade600,
           colorText: Colors.white);
     } catch (e) {
-      Get.snackbar('上传失败', '$e', snackPosition: SnackPosition.BOTTOM);
+      Get.snackbar('上传失败', describeApiError(e, fallback: '图片上传失败'),
+          snackPosition: SnackPosition.BOTTOM);
     } finally {
       if (mounted) setState(() => _isUploadingImage = false);
     }
@@ -235,8 +238,12 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
       }
       Get.back(result: true);
     } catch (e) {
-      Get.snackbar(_isEditing ? '修改失败' : '发布失败', '$e',
-          snackPosition: SnackPosition.BOTTOM);
+      Get.snackbar(
+        _isEditing ? '修改失败' : '发布失败',
+        describeApiError(e,
+            fallback: _isEditing ? '商品修改失败' : '商品发布失败'),
+        snackPosition: SnackPosition.BOTTOM,
+      );
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
     }

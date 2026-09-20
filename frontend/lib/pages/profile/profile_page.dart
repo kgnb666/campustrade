@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import '../../controllers/auth_controller.dart';
 import '../../controllers/review_controller.dart';
 import '../../routes/app_routes.dart';
+import '../../models/status_enums.dart';
 
 /// 个人中心页面
 class ProfilePage extends StatelessWidget {
@@ -115,7 +116,7 @@ class ProfilePage extends StatelessWidget {
           );
         }
 
-        final isVerified = user.verifyStatus == 'SUCCESS';
+        final isVerified = VerifyStatus.fromCode(user.verifyStatus).isVerified;
         final credit = user.credit;
 
         return SingleChildScrollView(
@@ -237,7 +238,7 @@ class ProfilePage extends StatelessWidget {
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Text(
-                                  isVerified ? '已认证' : (user.verifyStatus == 'PENDING' ? '审核中' : '未认证'),
+                                  isVerified ? VerifyStatus.success.label : VerifyStatus.fromCode(user.verifyStatus).label,
                                   style: TextStyle(
                                     color: isVerified ? Colors.green[800] : Colors.amber[900],
                                     fontWeight: FontWeight.bold,

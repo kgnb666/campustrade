@@ -334,10 +334,9 @@ class CampusTradeStage35CTests {
                 .andExpect(jsonPath("$.data").value(false));
 
         // User B 试图删除 A 的收藏：应报错（"您尚未收藏该商品"）
-        // 注意：BusinessException handler 无 @ResponseStatus，HTTP 状态码始终为 200，错误码在 body.code
         mockMvc.perform(delete("/favorite/" + testGoodsId)
                         .header("Authorization", "Bearer " + tokenUserB))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400));
 
         // User A 收藏依然完好
@@ -439,15 +438,14 @@ class CampusTradeStage35CTests {
     @DisplayName("12. 商品边界 - 不存在的 goodsId (9999999) 友好返回 404，无 500")
     void test12_goods_not_found_boundary() throws Exception {
         // GET /goods/{id} 是公开接口（SecurityConfig: /goods/{id:[0-9]+} permitAll）
-        // BusinessException handler 无 @ResponseStatus，HTTP 状态码为 200，错误码在 body.code
         mockMvc.perform(get("/goods/9999999"))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
 
         // POST /favorite/{goodsId} 需要认证
         mockMvc.perform(post("/favorite/9999999")
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
     }
 
@@ -455,10 +453,9 @@ class CampusTradeStage35CTests {
     @Order(13)
     @DisplayName("13. 商品边界 - 已下架/已删除商品收藏拦截返回 404，无 500")
     void test13_goods_off_shelf_boundary() throws Exception {
-        // BusinessException handler 无 @ResponseStatus，HTTP 状态码为 200，错误码在 body.code
         mockMvc.perform(post("/favorite/" + offShelfGoodsId)
                         .header("Authorization", "Bearer " + tokenUserB))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
     }
 
@@ -467,25 +464,24 @@ class CampusTradeStage35CTests {
     @DisplayName("14. 商品边界 - 负数与 0 goodsId 安全拦截返回 404，无数据库异常")
     void test14_goods_negative_and_zero_id() throws Exception {
         // SecurityConfig: /goods/{id:[0-9]+} 只匹配正整数路径，-1 不匹配公开规则需附带认证
-        // BusinessException handler 无 @ResponseStatus，HTTP 状态码为 200，错误码在 body.code
         mockMvc.perform(get("/goods/-1")
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
 
         // /goods/0 匹配 [0-9]+ 是公开接口，无需 token
         mockMvc.perform(get("/goods/0"))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
 
         mockMvc.perform(post("/favorite/-1")
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
 
         mockMvc.perform(post("/favorite/0")
                         .header("Authorization", "Bearer " + tokenUserA))
-                .andExpect(status().isOk())
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
     }
 
@@ -667,7 +663,6 @@ class CampusTradeStage35CTests {
                     MvcResult result = mockMvc.perform(post("/favorite/" + targetGoodsId)
                                     .header("Authorization", "Bearer " + tokenUserB))
                             .andReturn();
-                    // BusinessException handler 无 @ResponseStatus，HTTP 始终 200
                     // 必须解析 JSON body 中的 code 区分成功/失败
                     String responseBody = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
                     JsonNode json = objectMapper.readTree(responseBody);
@@ -711,18 +706,17 @@ class CampusTradeStage35CTests {
     @Order(23)
     @DisplayName("23. 幂等与保底 - 取消不存在的收藏返回 400，Redis 计数绝不低于 0，无 500")
     void test23_remove_favorite_idempotent_and_non_negative() throws Exception {
-        // BusinessException handler 无 @ResponseStatus，HTTP 状态码为 200，错误码在 body.code
         // User B 对未收藏的 testGoodsId 取消收藏
         mockMvc.perform(delete("/favorite/" + testGoodsId)
                         .header("Authorization", "Bearer " + tokenUserB))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("您尚未收藏该商品"));
 
         // 再次重复调用取消：同样幂等返回 400
         mockMvc.perform(delete("/favorite/" + testGoodsId)
                         .header("Authorization", "Bearer " + tokenUserB))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400));
 
         // 验证 Redis 计数保底不能为负数

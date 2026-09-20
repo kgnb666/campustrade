@@ -13,7 +13,7 @@ import com.campustrade.mapper.StudentVerifyMapper;
 import com.campustrade.mapper.UserCreditMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.security.JwtAuthenticationFilter;
-import com.campustrade.service.impl.StudentVerifyServiceImpl;
+import com.campustrade.service.StudentVerifyService;
 import com.campustrade.service.mail.VerifyCodeMailSender;
 import com.campustrade.support.TestCredentials;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -194,7 +194,7 @@ class CampusTradeStage1Tests {
                         .content(objectMapper.writeValueAsString(dto)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.message").value(StudentVerifyServiceImpl.VERIFY_CODE_SENT_MESSAGE))
+                .andExpect(jsonPath("$.message").value(StudentVerifyService.VERIFY_CODE_SENT_MESSAGE))
                 .andReturn();
 
         String responseBody = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
@@ -263,7 +263,7 @@ class CampusTradeStage1Tests {
                             .header("Authorization", "Bearer " + userAccessToken)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(objectMapper.writeValueAsString(codeDTO)))
-                    .andExpect(status().isOk())
+                    .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.code").value(400))
                     .andExpect(jsonPath("$.message").value("验证码错误，请重新输入"));
             assertEquals(String.valueOf(i), stringRedisTemplate.opsForValue().get(failKey),
@@ -278,7 +278,7 @@ class CampusTradeStage1Tests {
                         .header("Authorization", "Bearer " + userAccessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(codeDTO)))
-                .andExpect(status().isOk())
+                .andExpect(status().isTooManyRequests())
                 .andExpect(jsonPath("$.code").value(429))
                 .andExpect(jsonPath("$.message")
                         .value("验证码错误次数过多，本次验证码已失效，请重新获取验证码"));
@@ -291,7 +291,7 @@ class CampusTradeStage1Tests {
                         .header("Authorization", "Bearer " + userAccessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(codeDTO)))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("验证码已过期或未获取，请重新获取"));
 
@@ -565,7 +565,7 @@ class CampusTradeStage1Tests {
                 .andExpect(jsonPath("$.code").value(200));
 
         // 验证 Redis 黑名单存在该 Token
-        Boolean hasBlacklist = stringRedisTemplate.hasKey(JwtAuthenticationFilter.BLACKLIST_PREFIX + userAccessToken);
+        Boolean hasBlacklist = stringRedisTemplate.hasKey(RedisKeyConstants.jwtBlacklistKey(userAccessToken));
         assertTrue(Boolean.TRUE.equals(hasBlacklist), "登出后 Token 应被写入 Redis 黑名单");
 
         // 再次使用该 Token 请求应被拒绝 (401)

@@ -1,7 +1,6 @@
 package com.campustrade.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.campustrade.common.Result;
 import com.campustrade.entity.CampusSchool;
 import com.campustrade.mapper.CampusSchoolMapper;
 import com.campustrade.service.SchoolService;
@@ -22,7 +21,7 @@ public class SchoolServiceImpl implements SchoolService {
     private final CampusSchoolMapper campusSchoolMapper;
 
     @Override
-    public Result<List<SchoolVO>> listActiveSchools() {
+    public List<SchoolVO> listActiveSchools() {
         List<CampusSchool> schools = campusSchoolMapper.selectList(
                 new LambdaQueryWrapper<CampusSchool>()
                         .eq(CampusSchool::getStatus, "ACTIVE")
@@ -38,6 +37,6 @@ public class SchoolServiceImpl implements SchoolService {
                         .build())
                 .collect(Collectors.toList());
 
-        return Result.success(schoolVOList);
+        return schoolVOList;
     }
 }

@@ -25,7 +25,7 @@ public class UserController {
     @GetMapping("/profile")
     public Result<UserProfileVO> getProfile() {
         String username = SecurityUtils.getCurrentUsername();
-        return userService.getProfile(username);
+        return Result.success(userService.getProfile(username));
     }
 
     /**
@@ -34,6 +34,6 @@ public class UserController {
     @PutMapping("/profile")
     public Result<UserProfileVO> updateProfile(@Valid @RequestBody UpdateProfileDTO dto) {
         String username = SecurityUtils.getCurrentUsername();
-        return userService.updateProfile(username, dto);
+        return Result.success(userService.updateProfile(username, dto));
     }
 }

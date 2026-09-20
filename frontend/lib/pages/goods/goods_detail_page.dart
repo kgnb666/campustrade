@@ -7,6 +7,7 @@ import '../../models/goods_model.dart';
 import '../../routes/app_routes.dart';
 import '../../services/favorite_service.dart';
 import '../../services/goods_service.dart';
+import '../../models/status_enums.dart';
 
 /// 商品详情页 (图片轮播、价格、描述、卖家认证与信用分展示)
 class GoodsDetailPage extends StatefulWidget {
@@ -443,6 +444,8 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
 
   /// 底部动作条
   Widget _buildBottomBar(BuildContext context, GoodsDetailModel goods, bool isSeller) {
+    // 「是否可下单」完全由状态枚举决定：已售出 / 已下架 / 交易中 / 未知状态都不是可买
+    final isBuyable = GoodsStatus.fromCode(goods.status)?.isBuyable ?? false;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
@@ -462,11 +465,13 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
                   Expanded(
                     child: OutlinedButton(
                       onPressed: () async {
-                        final targetStatus = goods.status == 'ON_SALE' ? 'OFF_SHELF' : 'ON_SALE';
+                        final targetStatus = isBuyable
+                            ? GoodsStatus.offShelf.code
+                            : GoodsStatus.onSale.code;
                         await _goodsService.updateGoodsStatus(goods.id, targetStatus);
                         _loadDetail();
                       },
-                      child: Text(goods.status == 'ON_SALE' ? '下架商品' : '重新上架'),
+                      child: Text(isBuyable ? '下架商品' : '重新上架'),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -542,15 +547,15 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
                     flex: 5,
                     child: ElevatedButton.icon(
                       icon: const Icon(Icons.shopping_bag_outlined, size: 18),
-                      label: Text(goods.status == 'ON_SALE' ? '立即下单' : '暂不可买'),
+                      label: Text(isBuyable ? '立即下单' : '暂不可买'),
                       style: ElevatedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 12),
-                        backgroundColor: goods.status == 'ON_SALE'
+                        backgroundColor: isBuyable
                             ? Theme.of(context).colorScheme.primary
                             : Colors.grey.shade400,
                         foregroundColor: Colors.white,
                       ),
-                      onPressed: goods.status == 'ON_SALE'
+                      onPressed: isBuyable
                           ? () => _showCreateOrderSheet(context, goods)
                           : null,
                     ),

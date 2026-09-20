@@ -3,6 +3,8 @@ package com.campustrade.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.campustrade.common.constant.CreditRule;
+import com.campustrade.common.util.HtmlEscapeUtils;
 import com.campustrade.dto.review.CreateReviewRequest;
 import com.campustrade.entity.Goods;
 import com.campustrade.entity.Review;
@@ -18,7 +20,6 @@ import com.campustrade.mapper.ReviewLikeMapper;
 import com.campustrade.mapper.ReviewMapper;
 import com.campustrade.mapper.TradeOrderMapper;
 import com.campustrade.mapper.UserMapper;
-import com.campustrade.security.SecurityUtils;
 import com.campustrade.service.ReviewService;
 import com.campustrade.vo.review.OrderReviewStatusVO;
 import com.campustrade.vo.review.ReviewLikeVO;
@@ -74,9 +75,10 @@ public class ReviewServiceImpl implements ReviewService {
         }
 
         LocalDateTime now = LocalDateTime.now();
-        // 7 天 (168小时) 评价窗口期约束
-        if (order.getCompletedTime() != null && now.isAfter(order.getCompletedTime().plusHours(168))) {
-            throw new BusinessException(422, "订单已完成超过7天，评价通道已关闭");
+        // 评价窗口期约束（天数取自 CreditRule，唯一真相源）
+        if (CreditRule.isReviewWindowExpired(order.getCompletedTime(), now)) {
+            throw new BusinessException(422,
+                    "订单已完成超过" + CreditRule.REVIEW_WINDOW_DAYS + "天，评价通道已关闭");
         }
 
         // 3. 参与方校验 (买家或卖家)
@@ -102,24 +104,15 @@ public class ReviewServiceImpl implements ReviewService {
             throw new BusinessException(409, "您已对该订单发表过评价，不可重复评价");
         }
 
-        // 6. XSS 清洗与内容截断控制
-        String content = request.getContent();
-        if (content != null) {
-            content = cleanXss(content);
-            if (content.length() > 500) {
-                content = content.substring(0, 500);
-            }
-        }
+        // 6. 内容规范化：只做"保真"处理，不做任何字符改写
+        //    旧实现用黑名单清洗（删标签 + 删 "script"）会在入库阶段损坏正常文本
+        //    （"javascript" → "java"、"<3 这本书" → " 这本书"），且黑名单天然可绕过。
+        //    安全边界改由输出侧负责：正文按原文存储，任何 HTML 展示端必须经
+        //    HtmlEscapeUtils.escape(...) 转义（本项目的 Flutter 客户端以纯文本渲染，不解析 HTML）。
+        String content = normalizeContent(request.getContent());
 
-        // 7. 标签规范化清洗
-        String tagsJoined = null;
-        if (request.getTags() != null && !request.getTags().isEmpty()) {
-            tagsJoined = request.getTags().stream()
-                    .map(this::cleanXss)
-                    .filter(t -> t != null && !t.trim().isEmpty())
-                    .limit(5)
-                    .collect(Collectors.joining(","));
-        }
+        // 7. 标签规范化：同样保真，仅做去空白、去空项与数量/长度上限
+        String tagsJoined = normalizeTags(request.getTags());
 
         // 8. 构建评价实体并落库
         Review review = Review.builder()
@@ -166,12 +159,6 @@ public class ReviewServiceImpl implements ReviewService {
     }
 
     @Override
-    public IPage<ReviewVO> getReviewsByUser(Long userId, Integer page, Integer size) {
-        Long currentUserId = resolveCurrentUserIdOrNull();
-        return getReviewsByUser(userId, page, size, currentUserId);
-    }
-
-    @Override
     public IPage<ReviewVO> getReviewsByUser(Long userId, Integer page, Integer size, Long currentUserId) {
         if (userId == null) {
             throw new BusinessException(400, "目标用户ID不能为空");
@@ -189,12 +176,6 @@ public class ReviewServiceImpl implements ReviewService {
         );
 
         return assembleReviewPage(reviewPage, currentUserId);
-    }
-
-    @Override
-    public IPage<ReviewVO> getReviewsByGoods(Long goodsId, Integer page, Integer size) {
-        Long currentUserId = resolveCurrentUserIdOrNull();
-        return getReviewsByGoods(goodsId, page, size, currentUserId);
     }
 
     @Override
@@ -254,8 +235,8 @@ public class ReviewServiceImpl implements ReviewService {
 
         if (order.getOrderStatus() != OrderStatus.COMPLETED) {
             reason = "订单尚未完成，暂无法评价";
-        } else if (order.getCompletedTime() != null && now.isAfter(order.getCompletedTime().plusHours(168))) {
-            reason = "订单已完成超过7天，评价通道已关闭";
+        } else if (CreditRule.isReviewWindowExpired(order.getCompletedTime(), now)) {
+            reason = "订单已完成超过" + CreditRule.REVIEW_WINDOW_DAYS + "天，评价通道已关闭";
         } else if (myReviewEntity != null) {
             reason = "您已经评价过该订单";
         } else {
@@ -532,24 +513,54 @@ public class ReviewServiceImpl implements ReviewService {
         return count != null && count > 0;
     }
 
-    private Long resolveCurrentUserIdOrNull() {
-        try {
-            String username = SecurityUtils.getCurrentUsernameOrNull();
-            if (username != null) {
-                User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
-                if (user != null) {
-                    return user.getId();
-                }
-            }
-        } catch (Exception ignored) {
-        }
-        return null;
-    }
+    /** 评价正文最大长度（超出部分截断，与既有行为一致）。 */
+    private static final int REVIEW_CONTENT_MAX_LENGTH = 500;
 
-    private String cleanXss(String input) {
-        if (input == null) {
+    /** 单个标签最大长度（超出部分截断）。 */
+    private static final int REVIEW_TAG_MAX_LENGTH = 30;
+
+    /** 最多保留的标签数量（与既有行为一致）。 */
+    private static final int REVIEW_TAG_MAX_COUNT = 5;
+
+    /**
+     * 评价正文规范化：<b>只做长度上限与首尾空白处理，不改写任何字符</b>。
+     *
+     * <p>存储原文是刻意的选择：黑名单式"清洗"会把正常文本改坏（不可逆）且覆盖不全，
+     * 真正的防护点是输出侧转义（见 {@link HtmlEscapeUtils}）。</p>
+     *
+     * <p>这里只对"包含 HTML 标记迹象"打一条观测日志：既不改写内容，也不静默忽略，
+     * 让运营/风控能观察到可疑内容（例如有人试图在评价里塞标签）。</p>
+     */
+    private String normalizeContent(String rawContent) {
+        if (rawContent == null) {
             return null;
         }
-        return input.replaceAll("<[^>]*>", "").replace("script", "");
+        String content = rawContent.trim();
+        if (HtmlEscapeUtils.containsHtmlMarkup(content)) {
+            log.warn("[CONTENT-HTML-MARKUP] 评价正文包含 HTML 标记，已按原文存储（展示端必须转义）: length={}",
+                    content.length());
+        }
+        if (content.length() > REVIEW_CONTENT_MAX_LENGTH) {
+            content = content.substring(0, REVIEW_CONTENT_MAX_LENGTH);
+        }
+        return content;
+    }
+
+    /**
+     * 标签规范化：去首尾空白、丢弃空项、限制单标签长度与总数量，<b>不改写字符内容</b>。
+     */
+    private String normalizeTags(List<String> rawTags) {
+        if (rawTags == null || rawTags.isEmpty()) {
+            return null;
+        }
+        String joined = rawTags.stream()
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(tag -> !tag.isEmpty())
+                .map(tag -> tag.length() > REVIEW_TAG_MAX_LENGTH
+                        ? tag.substring(0, REVIEW_TAG_MAX_LENGTH) : tag)
+                .limit(REVIEW_TAG_MAX_COUNT)
+                .collect(Collectors.joining(","));
+        return joined.isEmpty() ? null : joined;
     }
 }

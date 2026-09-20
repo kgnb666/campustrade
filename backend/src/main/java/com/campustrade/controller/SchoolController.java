@@ -25,6 +25,6 @@ public class SchoolController {
      */
     @GetMapping("/list")
     public Result<List<SchoolVO>> listSchools() {
-        return schoolService.listActiveSchools();
+        return Result.success(schoolService.listActiveSchools());
     }
 }

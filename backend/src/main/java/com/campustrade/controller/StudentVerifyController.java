@@ -31,7 +31,8 @@ public class StudentVerifyController {
     @PostMapping("/verify")
     public Result<Void> submitVerify(@Valid @RequestBody StudentVerifyDTO dto) {
         String username = SecurityUtils.getCurrentUsername();
-        return studentVerifyService.submitVerify(username, dto);
+        studentVerifyService.submitVerify(username, dto);
+        return Result.success(StudentVerifyService.VERIFY_CODE_SENT_MESSAGE, null);
     }
 
     /**
@@ -40,6 +41,7 @@ public class StudentVerifyController {
     @PostMapping("/verify/code")
     public Result<Void> verifyCode(@Valid @RequestBody StudentVerifyCodeDTO dto) {
         String username = SecurityUtils.getCurrentUsername();
-        return studentVerifyService.verifyCode(username, dto);
+        studentVerifyService.verifyCode(username, dto);
+        return Result.success(StudentVerifyService.VERIFY_SUCCESS_MESSAGE, null);
     }
 }

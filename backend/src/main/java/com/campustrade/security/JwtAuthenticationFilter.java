@@ -45,8 +45,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper;
 
-    public static final String BLACKLIST_PREFIX = RedisKeyConstants.JWT_BLACKLIST_PREFIX;
-
     @Override
     protected void doFilterInternal(HttpServletRequest request,
                                     HttpServletResponse response,
@@ -58,7 +56,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String tokenFingerprint = TokenHashUtils.fingerprint(token);
 
             // 1. 检查 Token 是否已被列入 Redis 黑名单
-            Boolean isBlacklisted = stringRedisTemplate.hasKey(BLACKLIST_PREFIX + token);
+            Boolean isBlacklisted = stringRedisTemplate.hasKey(RedisKeyConstants.jwtBlacklistKey(token));
             if (Boolean.TRUE.equals(isBlacklisted)) {
                 log.debug("令牌已被列入黑名单，拒绝认证: tokenFp={}", tokenFingerprint);
                 filterChain.doFilter(request, response);

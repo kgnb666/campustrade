@@ -65,7 +65,15 @@ public class Goods {
     private String conditionLevel;
 
     /**
-     * 商品状态: DRAFT, ON_SALE, LOCKED, SOLD, OFF_SHELF
+     * 商品状态。
+     *
+     * <p>取值域由 {@link com.campustrade.enums.GoodsStatus} 唯一定义，并与 V10 迁移的
+     * CHECK 约束 {@code chk_goods_status_domain} 完全一致：
+     * {@code DRAFT / ON_SALE / LOCKED / SOLD / OFF_SHELF}。</p>
+     *
+     * <p>本列刻意保持 {@code String}（数据库为 {@code VARCHAR(20)}），状态字面量不在业务代码中散落：
+     * 判定与写入一律经 {@code GoodsStatus.xxx.getCode()} / {@code GoodsStatus.xxx.matches(...)}。
+     * 其中 {@code DRAFT} 目前没有任何写入路径（仅由数据库约束保留）。</p>
      */
     private String status;
 

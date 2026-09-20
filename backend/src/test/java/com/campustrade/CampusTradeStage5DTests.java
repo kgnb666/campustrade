@@ -473,11 +473,11 @@ class CampusTradeStage5DTests {
         reviewService.createReview(sellerId, reqSeller);
 
         // 1. 查询卖家收到的评价
-        IPage<ReviewVO> userReviews = reviewService.getReviewsByUser(sellerId, 1, 10);
+        IPage<ReviewVO> userReviews = reviewService.getReviewsByUser(sellerId, 1, 10, null);
         assertTrue(userReviews.getTotal() >= 1);
 
         // 2. 查询商品收到的评价
-        IPage<ReviewVO> goodsReviews = reviewService.getReviewsByGoods(goodsId, 1, 10);
+        IPage<ReviewVO> goodsReviews = reviewService.getReviewsByGoods(goodsId, 1, 10, null);
         assertTrue(goodsReviews.getTotal() >= 1);
 
         // 3. 买家视角查询订单双向状态
@@ -509,7 +509,7 @@ class CampusTradeStage5DTests {
         assertTrue(myVO.getIsAnonymous());
 
         // 第三方或被评价人查询该评价
-        IPage<ReviewVO> pageResult = reviewService.getReviewsByUser(sellerId, 1, 10);
+        IPage<ReviewVO> pageResult = reviewService.getReviewsByUser(sellerId, 1, 10, null);
         ReviewVO maskedVO = pageResult.getRecords().stream()
                 .filter(r -> r.getId().equals(myVO.getId()))
                 .findFirst()

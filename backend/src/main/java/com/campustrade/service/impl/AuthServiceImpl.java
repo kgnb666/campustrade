@@ -2,7 +2,6 @@ package com.campustrade.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
-import com.campustrade.common.Result;
 import com.campustrade.common.ResultCode;
 import com.campustrade.common.constant.RedisKeyConstants;
 import com.campustrade.dto.LoginRequestDTO;
@@ -12,7 +11,6 @@ import com.campustrade.entity.User;
 import com.campustrade.exception.BusinessException;
 import com.campustrade.mapper.UserCreditMapper;
 import com.campustrade.mapper.UserMapper;
-import com.campustrade.security.JwtAuthenticationFilter;
 import com.campustrade.security.JwtTokenProvider;
 import com.campustrade.security.TokenHashUtils;
 import com.campustrade.service.AuthService;
@@ -32,6 +30,7 @@ import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
+import com.campustrade.common.constant.CreditRule;
 
 /**
  * 认证与授权业务实现类
@@ -58,10 +57,7 @@ public class AuthServiceImpl implements AuthService {
     private final StringRedisTemplate stringRedisTemplate;
     private final UserService userService;
 
-    public static final String REFRESH_TOKEN_PREFIX = RedisKeyConstants.JWT_REFRESH_PREFIX;
-
-    /** 连续登录失败多少次后锁定（默认 5 次） */
-    @Value("${security.login.max-failures:5}")
+    /** 连续登录失败多少次后锁定（默认 5 次） */    @Value("${security.login.max-failures:5}")
     private int loginMaxFailures;
 
     /** 登录失败计数与锁定窗口时长（分钟），默认 15 分钟 */
@@ -74,7 +70,7 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Result<Void> register(RegisterRequestDTO dto, String clientIp) {
+    public void register(RegisterRequestDTO dto, String clientIp) {
         // 0. 来源 IP 注册限频：阻断脚本化批量注册（每次请求都计数，命中上限直接拒绝）
         enforceRegisterIpLimit(clientIp);
 
@@ -119,20 +115,18 @@ public class AuthServiceImpl implements AuthService {
         }
         log.info("新用户注册成功: userId={}, username={}", user.getId(), user.getUsername());
 
-        // 4. 自动生成用户初始信用档案 (credit_score = 100)
+        // 4. 自动生成用户初始信用档案 (credit_score = CreditRule.SCORE_DEFAULT)
         //    单语句 INSERT ... ON CONFLICT (user_id) DO NOTHING：并发下不会抛唯一键异常污染事务。
         userCreditMapper.insertCreditIfAbsent(IdWorker.getId(), user.getId());
-        log.info("为新用户建立初始信用档案: userId={}, creditScore=100", user.getId());
-
-        return Result.success("注册成功", null);
+        log.info("为新用户建立初始信用档案: userId={}, creditScore={}", user.getId(), CreditRule.SCORE_DEFAULT);
     }
 
     @Override
-    public Result<LoginVO> login(LoginRequestDTO dto, String clientIp) {
+    public LoginVO login(LoginRequestDTO dto, String clientIp) {
         // 计数键与数据库查询键分开：计数键做标准化（去首尾空白），避免用空白字符绕过限流
-        String failUsernameKey = RedisKeyConstants.LOGIN_FAIL_USERNAME_PREFIX
-                + (dto.getUsername() == null ? "" : dto.getUsername().trim());
-        String failIpKey = RedisKeyConstants.LOGIN_FAIL_IP_PREFIX + clientIp;
+        String failUsernameKey = RedisKeyConstants.loginFailUsernameKey(
+                dto.getUsername() == null ? "" : dto.getUsername().trim());
+        String failIpKey = RedisKeyConstants.loginFailIpKey(clientIp);
 
         // 0. 锁定校验：达到阈值后直接拒绝，不再进行密码比对
         assertNotLocked(failUsernameKey, "登录失败次数过多，账号已被临时锁定，请 " + loginLockMinutes + " 分钟后再试");
@@ -164,7 +158,17 @@ public class AuthServiceImpl implements AuthService {
         saveRefreshSession(user.getId(), refreshToken);
 
         // 5. 查询当前用户基础信息与信用数据
-        UserProfileVO profile = userService.getProfile(user.getUsername()).getData();
+        //    getProfile 是领域层调用：查不到用户会直接抛 404 业务异常，因此这里拿到的
+        //    profile 要么是完整资料、要么是异常，绝不会出现"登录成功但 userInfo 为空"。
+        UserProfileVO profile = userService.getProfile(user.getUsername());
+        if (profile == null) {
+            // 兜底不变量：getProfile 的契约是"非空或抛异常"，此处显式拦截异常实现，
+            // 保证 LoginVO.userInfo 永不为 null（前端无需为"成功但无用户信息"补分支）。
+            log.error("登录流程获取用户资料返回空，拒绝以空 userInfo 返回成功: userId={}, username={}",
+                    user.getId(), user.getUsername());
+            throw new BusinessException(ResultCode.INTERNAL_SERVER_ERROR.getCode(),
+                    "登录失败：无法读取用户资料，请稍后重试");
+        }
 
         LoginVO loginVO = LoginVO.builder()
                 .accessToken(accessToken)
@@ -173,11 +177,11 @@ public class AuthServiceImpl implements AuthService {
                 .build();
 
         log.info("用户登录成功: userId={}, username={}", user.getId(), user.getUsername());
-        return Result.success("登录成功", loginVO);
+        return loginVO;
     }
 
     @Override
-    public Result<Void> logout(String bearerToken) {
+    public void logout(String bearerToken) {
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
             String token = bearerToken.substring(7);
             long remainingMs = jwtTokenProvider.getRemainingExpiration(token);
@@ -185,7 +189,7 @@ public class AuthServiceImpl implements AuthService {
             if (remainingMs > 0) {
                 // 将未过期的 Token 写入 Redis 黑名单，TTL 为其剩余过期时间
                 stringRedisTemplate.opsForValue().set(
-                        JwtAuthenticationFilter.BLACKLIST_PREFIX + token,
+                        RedisKeyConstants.jwtBlacklistKey(token),
                         "1",
                         remainingMs,
                         TimeUnit.MILLISECONDS
@@ -196,17 +200,16 @@ public class AuthServiceImpl implements AuthService {
             // 删除该用户的 Refresh Token 会话：登出后刷新接口不再可用，无法"续命"出新令牌
             Long userId = jwtTokenProvider.getUserIdAllowingExpired(token);
             if (userId != null) {
-                Boolean removed = stringRedisTemplate.delete(REFRESH_TOKEN_PREFIX + userId);
+                Boolean removed = stringRedisTemplate.delete(RedisKeyConstants.jwtRefreshKey(userId));
                 log.info("登出已清除 Refresh Token 会话: userId={}, removed={}", userId, removed);
             } else {
                 log.warn("登出请求未能解析出用户身份，跳过 Refresh Token 会话清理（令牌可能非法或已被篡改）");
             }
         }
-        return Result.success("安全登出成功", null);
     }
 
     @Override
-    public Result<TokenRefreshVO> refresh(RefreshTokenRequest request) {
+    public TokenRefreshVO refresh(RefreshTokenRequest request) {
         if (request == null || !StringUtils.hasText(request.getRefreshToken())) {
             throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "Refresh Token 不能为空");
         }
@@ -230,7 +233,7 @@ public class AuthServiceImpl implements AuthService {
             throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "无效的令牌载荷信息");
         }
 
-        String refreshKey = REFRESH_TOKEN_PREFIX + userId;
+        String refreshKey = RedisKeyConstants.jwtRefreshKey(userId);
         String cachedHash = stringRedisTemplate.opsForValue().get(refreshKey);
         String presentedHash = TokenHashUtils.sha256Hex(refreshToken);
 
@@ -264,7 +267,7 @@ public class AuthServiceImpl implements AuthService {
 
         log.info("用户成功续期并轮换令牌: userId={}, username={}, tokenFp={}",
                 user.getId(), user.getUsername(), TokenHashUtils.fingerprint(newRefreshToken));
-        return Result.success("令牌刷新成功", vo);
+        return vo;
     }
 
     // =========================================================================
@@ -295,7 +298,7 @@ public class AuthServiceImpl implements AuthService {
      */
     private void saveRefreshSession(Long userId, String refreshToken) {
         stringRedisTemplate.opsForValue().set(
-                REFRESH_TOKEN_PREFIX + userId,
+                RedisKeyConstants.jwtRefreshKey(userId),
                 TokenHashUtils.sha256Hex(refreshToken),
                 jwtTokenProvider.getRefreshTokenExpiration(),
                 TimeUnit.MILLISECONDS
@@ -306,7 +309,7 @@ public class AuthServiceImpl implements AuthService {
      * 注册来源 IP 限频：同一 IP 每个时间窗口（1 小时）内的注册请求次数上限。
      */
     private void enforceRegisterIpLimit(String clientIp) {
-        String key = RedisKeyConstants.REGISTER_IP_PREFIX + clientIp;
+        String key = RedisKeyConstants.registerIpKey(clientIp);
         Long count = stringRedisTemplate.opsForValue().increment(key);
         if (count != null && count == 1L) {
             stringRedisTemplate.expire(key, 1, TimeUnit.HOURS);

@@ -1,5 +1,6 @@
 package com.campustrade.listener;
 
+import com.campustrade.common.constant.CreditRule;
 import com.campustrade.enums.CreditChangeType;
 import com.campustrade.event.ReviewCreatedEvent;
 import com.campustrade.service.CreditService;
@@ -68,54 +69,34 @@ public class CreditReviewEventListener {
                 lastException);
     }
 
+    /**
+     * 把一次评价星级折算为被评价人的信用变动。
+     *
+     * <p>变动幅度与方向全部来自 {@link CreditRule}：本方法不再复述"5星+3、1星-5"这类数值，
+     * 也不再写加/扣两条分支（由 {@link CreditService#applyDelta} 按符号落地），
+     * 从而与管理员"屏蔽冲正/恢复补偿"两条路径共用同一张星级分值表。</p>
+     */
     private void applyCreditChange(Long targetUserId, Long reviewId, int score) {
-        switch (score) {
-            case 5:
-                creditService.addCredit(
-                        targetUserId,
-                        3,
-                        CreditChangeType.REVIEW_GOOD,
-                        "REVIEW",
-                        reviewId,
-                        "获得5星交易好评"
-                );
-                break;
-            case 4:
-                creditService.addCredit(
-                        targetUserId,
-                        1,
-                        CreditChangeType.REVIEW_GOOD,
-                        "REVIEW",
-                        reviewId,
-                        "获得4星交易好评"
-                );
-                break;
-            case 3:
-                // 3星一般，不增减信用分
-                log.info("3星评价，不调整信用积分: reviewId={}, targetUserId={}", reviewId, targetUserId);
-                break;
-            case 2:
-                creditService.deductCredit(
-                        targetUserId,
-                        2,
-                        CreditChangeType.REVIEW_BAD,
-                        "REVIEW",
-                        reviewId,
-                        "获得2星交易差评"
-                );
-                break;
-            case 1:
-                creditService.deductCredit(
-                        targetUserId,
-                        5,
-                        CreditChangeType.REVIEW_BAD,
-                        "REVIEW",
-                        reviewId,
-                        "获得1星交易极差评"
-                );
-                break;
-            default:
-                log.warn("未识别的星级评分: score={}, reviewId={}", score, reviewId);
+        if (!CreditRule.isKnownStar(score)) {
+            log.warn("未识别的星级评分，本次不做任何信用变动: score={}, reviewId={}", score, reviewId);
+            return;
         }
+
+        int delta = CreditRule.reviewDeltaForScore(score);
+        if (delta == 0) {
+            // 3 星为中性评价：规则值就是 0，明确记录"走过规则但无需调整"而不是静默跳过
+            log.info("{}星评价为中性评价，不调整信用积分: reviewId={}, targetUserId={}", score, reviewId, targetUserId);
+            return;
+        }
+
+        creditService.applyDelta(
+                targetUserId,
+                delta,
+                delta > 0 ? CreditChangeType.REVIEW_GOOD : CreditChangeType.REVIEW_BAD,
+                "REVIEW",
+                reviewId,
+                String.format("获得%d星交易%s", score, delta > 0 ? "好评" : (score == 1 ? "极差评" : "差评")),
+                null
+        );
     }
 }

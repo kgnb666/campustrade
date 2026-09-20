@@ -28,7 +28,8 @@ public class AuthController {
      */
     @PostMapping("/register")
     public Result<Void> register(@Valid @RequestBody RegisterRequestDTO dto, HttpServletRequest request) {
-        return authService.register(dto, ClientIpUtils.resolve(request));
+        authService.register(dto, ClientIpUtils.resolve(request));
+        return Result.success("注册成功", null);
     }
 
     /**
@@ -36,7 +37,7 @@ public class AuthController {
      */
     @PostMapping("/login")
     public Result<LoginVO> login(@Valid @RequestBody LoginRequestDTO dto, HttpServletRequest request) {
-        return authService.login(dto, ClientIpUtils.resolve(request));
+        return Result.success("登录成功", authService.login(dto, ClientIpUtils.resolve(request)));
     }
 
     /**
@@ -44,7 +45,8 @@ public class AuthController {
      */
     @PostMapping("/logout")
     public Result<Void> logout(@RequestHeader(value = "Authorization", required = false) String bearerToken) {
-        return authService.logout(bearerToken);
+        authService.logout(bearerToken);
+        return Result.success("安全登出成功", null);
     }
 
     /**
@@ -52,6 +54,6 @@ public class AuthController {
      */
     @PostMapping("/refresh")
     public Result<TokenRefreshVO> refresh(@Valid @RequestBody RefreshTokenRequest dto) {
-        return authService.refresh(dto);
+        return Result.success("令牌刷新成功", authService.refresh(dto));
     }
 }

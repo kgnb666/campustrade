@@ -1,7 +1,7 @@
 package com.campustrade.service.impl;
 
+import com.campustrade.common.constant.CreditRule;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.campustrade.common.Result;
 import com.campustrade.common.ResultCode;
 import com.campustrade.dto.UpdateProfileDTO;
 import com.campustrade.entity.CampusSchool;
@@ -38,7 +38,7 @@ public class UserServiceImpl implements UserService {
     private final CampusSchoolMapper campusSchoolMapper;
 
     @Override
-    public Result<UserProfileVO> getProfile(String username) {
+    public UserProfileVO getProfile(String username) {
         User user = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getUsername, username)
         );
@@ -58,7 +58,7 @@ public class UserServiceImpl implements UserService {
             log.debug("用户信用档案尚未建立，GET /profile 仅返回默认信用视图（不落库）: userId={}", user.getId());
         }
         int creditScore = (userCredit != null && userCredit.getCreditScore() != null)
-                ? userCredit.getCreditScore() : 100;
+                ? userCredit.getCreditScore() : CreditRule.SCORE_DEFAULT;
         int tradeCount = (userCredit != null && userCredit.getTradeCount() != null)
                 ? userCredit.getTradeCount() : 0;
         int goodReviewCount = (userCredit != null && userCredit.getGoodReviewCount() != null)
@@ -108,12 +108,12 @@ public class UserServiceImpl implements UserService {
                         .build())
                 .build();
 
-        return Result.success(profileVO);
+        return profileVO;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Result<UserProfileVO> updateProfile(String username, UpdateProfileDTO dto) {
+    public UserProfileVO updateProfile(String username, UpdateProfileDTO dto) {
         User user = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getUsername, username)
         );

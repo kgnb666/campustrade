@@ -229,7 +229,7 @@ class CampusTradeStage35ATests {
         // 第二次重复收藏 -> 必须被拦截并返回 400
         mockMvc.perform(post("/favorite/" + testGoodsId)
                         .header("Authorization", "Bearer " + tokenA))
-                .andExpect(status().isOk())
+                .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400))
                 .andExpect(jsonPath("$.message").value("您已收藏过该商品"));
 
@@ -417,17 +417,15 @@ class CampusTradeStage35ATests {
                     MvcResult res = mockMvc.perform(post("/favorite/" + testGoodsId)
                                     .header("Authorization", "Bearer " + tokenA))
                             .andReturn();
+                    // 业务错误现在以真实 HTTP 状态返回（业务码 == HTTP 状态码），
+                    // 因此"被业务拦截"必须同时满足 HTTP 400 与 body.code == 400。
                     int httpStatus = res.getResponse().getStatus();
-                    if (httpStatus == 200) {
-                        JsonNode node = objectMapper.readTree(res.getResponse().getContentAsString(StandardCharsets.UTF_8));
-                        int code = node.path("code").asInt();
-                        if (code == 200) {
-                            success200.incrementAndGet();
-                        } else if (code == 400) {
-                            rejected400.incrementAndGet();
-                        } else {
-                            otherErrors.incrementAndGet();
-                        }
+                    JsonNode node = objectMapper.readTree(res.getResponse().getContentAsString(StandardCharsets.UTF_8));
+                    int code = node.path("code").asInt();
+                    if (httpStatus == 200 && code == 200) {
+                        success200.incrementAndGet();
+                    } else if (httpStatus == 400 && code == 400) {
+                        rejected400.incrementAndGet();
                     } else {
                         otherErrors.incrementAndGet();
                     }

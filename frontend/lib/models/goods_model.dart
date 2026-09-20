@@ -1,3 +1,5 @@
+import 'status_enums.dart';
+
 /// 商品列表简要模型
 class GoodsItemModel {
   final String id;
@@ -51,7 +53,7 @@ class GoodsItemModel {
           ? double.tryParse(json['originalPrice'].toString())
           : null,
       conditionLevel: json['conditionLevel'] ?? '9成新',
-      status: json['status'] ?? 'ON_SALE',
+      status: json['status'] ?? GoodsStatus.onSale.code,
       location: json['location'],
       viewCount: json['viewCount'] ?? 0,
       createdTime: json['createdTime'],
@@ -150,7 +152,7 @@ class GoodsDetailModel {
           ? double.tryParse(json['originalPrice'].toString())
           : null,
       conditionLevel: json['conditionLevel'] ?? '9成新',
-      status: json['status'] ?? 'ON_SALE',
+      status: json['status'] ?? GoodsStatus.onSale.code,
       location: json['location'],
       viewCount: json['viewCount'] ?? 0,
       createdTime: json['createdTime'],

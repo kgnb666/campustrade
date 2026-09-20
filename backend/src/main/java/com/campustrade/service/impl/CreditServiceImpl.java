@@ -2,6 +2,7 @@ package com.campustrade.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
+import com.campustrade.common.constant.CreditRule;
 import com.campustrade.entity.UserCredit;
 import com.campustrade.entity.UserCreditLog;
 import com.campustrade.enums.CreditChangeType;
@@ -50,10 +51,10 @@ public class CreditServiceImpl implements CreditService {
     /** 幂等键字段分隔符（必须与 V10 迁移脚本中的回填表达式保持一致）。 */
     private static final String IDEM_KEY_SEPARATOR = "|";
 
-    /** 信用分有效区间（业务规则数值，保持不变）。 */
-    private static final int SCORE_MIN = 0;
-    private static final int SCORE_MAX = 200;
-    private static final int SCORE_DEFAULT = 100;
+    /** 信用分有效区间与初始值：全部取自 {@link CreditRule}（业务规则数值的唯一真相源）。 */
+    private static final int SCORE_MIN = CreditRule.SCORE_MIN;
+    private static final int SCORE_MAX = CreditRule.SCORE_MAX;
+    private static final int SCORE_DEFAULT = CreditRule.SCORE_DEFAULT;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -134,6 +135,30 @@ public class CreditServiceImpl implements CreditService {
             String actionKey
     ) {
         return applyScoreChange(userId, score, false, type, relatedType, relatedId, reason, actionKey);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public UserCredit applyDelta(
+            Long userId,
+            Integer delta,
+            CreditChangeType type,
+            String relatedType,
+            Long relatedId,
+            String reason,
+            String actionKey
+    ) {
+        if (delta == null || delta == 0) {
+            // 规则值为 0（例如 3 星评价）时既不调整余额也不产生审计流水，
+            // 与"调用方根本不发起调用"的旧行为逐字等价，只是把"是否为 0"的判断收进领域层。
+            if (userId == null) {
+                throw new IllegalArgumentException("用户ID不能为空");
+            }
+            log.info("信用变动幅度为 0，按规则不做任何调整: userId={}, changeType={}, relatedType={}, relatedId={}, actionKey={}",
+                    userId, type == null ? null : type.getCode(), relatedType, relatedId, actionKey);
+            return getOrCreateCredit(userId);
+        }
+        return applyScoreChange(userId, Math.abs(delta), delta > 0, type, relatedType, relatedId, reason, actionKey);
     }
 
     /**

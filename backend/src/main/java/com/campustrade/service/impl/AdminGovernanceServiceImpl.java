@@ -3,6 +3,7 @@ package com.campustrade.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.campustrade.common.constant.CreditRule;
 import com.campustrade.dto.report.HandleReportRequest;
 import com.campustrade.dto.report.ReportQueryRequest;
 import com.campustrade.entity.*;
@@ -224,7 +225,7 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                             .targetType("GOODS")
                             .targetId(goods.getId())
                             .beforeStatus(beforeStatus)
-                            .afterStatus("OFF_SHELF")
+                            .afterStatus(GoodsStatus.OFF_SHELF.getCode())
                             .reason(note)
                             .ipAddress(ipAddress)
                             .createdTime(now)
@@ -303,65 +304,38 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
     }
 
     /**
-     * 评价违规屏蔽后的信用精准冲正
+     * 评价违规屏蔽后的信用精准冲正。
+     *
+     * <p>冲正幅度 = -（该星级原本产生的信用变动），数值来自 {@link CreditRule}；
+     * 方向（追缴/补回）由 {@link CreditService#applyDelta} 按符号落地，
+     * 因此"屏蔽冲正"与"评价创建加分"必然互为精确逆操作，不会出现某一边单独改数值后的错配。</p>
      */
     private void reversalReviewCredit(Review review, String note, String actionKey) {
         if (review == null || review.getReviewedUserId() == null || review.getScore() == null) {
             return;
         }
         int score = review.getScore();
-        Long targetUserId = review.getReviewedUserId();
-        Long reviewId = review.getId();
+        if (!CreditRule.isKnownStar(score)) {
+            log.warn("评价星级不在信用规则取值域内，跳过冲正: reviewId={}, score={}", review.getId(), score);
+            return;
+        }
 
-        // 5星原 +3 -> 冲正扣回 3 分
-        if (score == 5) {
-            creditService.deductCredit(
-                    targetUserId,
-                    3,
-                    CreditChangeType.ADMIN_ADJUST,
-                    "REVIEW",
-                    reviewId,
-                    "违规好评被管理员屏蔽，追缴信用分 (" + note + ")",
-                    actionKey
-            );
+        int delta = CreditRule.reviewReversalDeltaForScore(score);
+        if (delta == 0) {
+            log.info("{}星评价原变动为 0，屏蔽无需冲正: reviewId={}, reviewedUserId={}",
+                    score, review.getId(), review.getReviewedUserId());
+            return;
         }
-        // 4星原 +1 -> 冲正扣回 1 分
-        else if (score == 4) {
-            creditService.deductCredit(
-                    targetUserId,
-                    1,
-                    CreditChangeType.ADMIN_ADJUST,
-                    "REVIEW",
-                    reviewId,
-                    "违规好评被管理员屏蔽，追缴信用分 (" + note + ")",
-                    actionKey
-            );
-        }
-        // 2星原 -2 -> 冲正补回 2 分
-        else if (score == 2) {
-            creditService.addCredit(
-                    targetUserId,
-                    2,
-                    CreditChangeType.ADMIN_ADJUST,
-                    "REVIEW",
-                    reviewId,
-                    "违规差评被管理员屏蔽，恢复信用分 (" + note + ")",
-                    actionKey
-            );
-        }
-        // 1星原 -5 -> 冲正补回 5 分
-        else if (score == 1) {
-            creditService.addCredit(
-                    targetUserId,
-                    5,
-                    CreditChangeType.ADMIN_ADJUST,
-                    "REVIEW",
-                    reviewId,
-                    "违规差评被管理员屏蔽，恢复信用分 (" + note + ")",
-                    actionKey
-            );
-        }
-        // 3星原变动 0 分 -> 无需冲正
+
+        creditService.applyDelta(
+                review.getReviewedUserId(),
+                delta,
+                CreditChangeType.ADMIN_ADJUST,
+                "REVIEW",
+                review.getId(),
+                (delta < 0 ? "违规好评被管理员屏蔽，追缴信用分 (" : "违规差评被管理员屏蔽，恢复信用分 (") + note + ")",
+                actionKey
+        );
     }
 
     /**
@@ -565,64 +539,37 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
     }
 
     /**
-     * 评价恢复后的信用精准反向补偿
+     * 评价恢复后的信用精准反向补偿。
+     *
+     * <p>补偿幅度 = 该星级原本产生的信用变动，数值来自 {@link CreditRule}：
+     * {@link #reversalReviewCredit} 与本方法的幅度严格互为相反数，
+     * 因此"屏蔽 → 恢复"这一轮治理动作对用户信用分的净影响恒为 0（不产生漂移）。</p>
      */
     private void restoreReviewCredit(Review review, String note, String actionKey) {
         if (review == null || review.getReviewedUserId() == null || review.getScore() == null) {
             return;
         }
         int score = review.getScore();
-        Long targetUserId = review.getReviewedUserId();
-        Long reviewId = review.getId();
+        if (!CreditRule.isKnownStar(score)) {
+            log.warn("评价星级不在信用规则取值域内，跳过恢复补偿: reviewId={}, score={}", review.getId(), score);
+            return;
+        }
 
-        // 5星好评恢复: +3 分
-        if (score == 5) {
-            creditService.addCredit(
-                    targetUserId,
-                    3,
-                    CreditChangeType.ADMIN_ADJUST,
-                    "REVIEW_RESTORE",
-                    reviewId,
-                    "管理员恢复合规好评，恢复信用分 (" + note + ")",
-                    actionKey
-            );
+        int delta = CreditRule.reviewRestoreDeltaForScore(score);
+        if (delta == 0) {
+            log.info("{}星评价原变动为 0，恢复无需补偿: reviewId={}, reviewedUserId={}",
+                    score, review.getId(), review.getReviewedUserId());
+            return;
         }
-        // 4星好评恢复: +1 分
-        else if (score == 4) {
-            creditService.addCredit(
-                    targetUserId,
-                    1,
-                    CreditChangeType.ADMIN_ADJUST,
-                    "REVIEW_RESTORE",
-                    reviewId,
-                    "管理员恢复合规好评，恢复信用分 (" + note + ")",
-                    actionKey
-            );
-        }
-        // 2星差评恢复: -2 分
-        else if (score == 2) {
-            creditService.deductCredit(
-                    targetUserId,
-                    2,
-                    CreditChangeType.ADMIN_ADJUST,
-                    "REVIEW_RESTORE",
-                    reviewId,
-                    "管理员恢复差评展示，重新扣减信用分 (" + note + ")",
-                    actionKey
-            );
-        }
-        // 1星差评恢复: -5 分
-        else if (score == 1) {
-            creditService.deductCredit(
-                    targetUserId,
-                    5,
-                    CreditChangeType.ADMIN_ADJUST,
-                    "REVIEW_RESTORE",
-                    reviewId,
-                    "管理员恢复差评展示，重新扣减信用分 (" + note + ")",
-                    actionKey
-            );
-        }
-        // 3星评价: 0 分，无需调整
+
+        creditService.applyDelta(
+                review.getReviewedUserId(),
+                delta,
+                CreditChangeType.ADMIN_ADJUST,
+                "REVIEW_RESTORE",
+                review.getId(),
+                (delta > 0 ? "管理员恢复合规好评，恢复信用分 (" : "管理员恢复差评展示，重新扣减信用分 (") + note + ")",
+                actionKey
+        );
     }
 }

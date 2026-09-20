@@ -20,12 +20,65 @@ void main() {
       expect(OrderStatus.fromCode('Cancelled'), equals(OrderStatus.cancelled));
     });
 
-    test('OrderStatus fromCode should fallback safely for null or invalid input',
+    test('OrderStatus fromCode falls back to unknown (never to a known status)',
         () {
-      expect(OrderStatus.fromCode(null), equals(OrderStatus.waitSellerConfirm));
-      expect(OrderStatus.fromCode(''), equals(OrderStatus.waitSellerConfirm));
+      // 未知/缺失状态绝不能回落成"待卖家确认"：那会让 UI 显示错误文案，
+      // 还会给出「确认接单」「取消订单」等可点击的卖家操作。
+      expect(OrderStatus.fromCode(null), equals(OrderStatus.unknown));
+      expect(OrderStatus.fromCode(''), equals(OrderStatus.unknown));
+      expect(OrderStatus.fromCode('   '), equals(OrderStatus.unknown));
       expect(OrderStatus.fromCode('UNKNOWN_STATUS'),
-          equals(OrderStatus.waitSellerConfirm));
+          equals(OrderStatus.unknown));
+      expect(OrderStatus.fromCode('REFUNDING'), equals(OrderStatus.unknown));
+      expect(OrderStatus.unknown.isKnown, isFalse);
+      expect(OrderStatus.unknown.isReadOnly, isTrue);
+      expect(OrderStatus.waitSellerConfirm.isKnown, isTrue);
+      expect(OrderStatus.waitSellerConfirm.isReadOnly, isFalse);
+    });
+
+    test('OrderVO exposes unknown status read-only with the server raw code', () {
+      final order = OrderVO.fromJson({
+        'id': 1,
+        'orderNo': 'ORD_UNKNOWN',
+        'goodsId': 2,
+        'goodsTitleSnapshot': '未知状态订单',
+        'goodsPriceSnapshot': 10.0,
+        'orderStatus': 'REFUNDING',
+        'statusDesc': '退款处理中',
+      });
+
+      expect(order.orderStatus, equals(OrderStatus.unknown));
+      expect(order.isKnownStatus, isFalse);
+      expect(order.isUnknownStatus, isTrue);
+      expect(order.statusCode, equals('REFUNDING'));
+      expect(order.statusText, equals('退款处理中'));
+
+      // 未知状态不提供任何操作入口
+      expect(order.canConfirm, isFalse);
+      expect(order.canCancel, isFalse);
+      expect(order.canComplete, isFalse);
+      expect(order.isWaitSellerConfirm, isFalse);
+      expect(order.isWaitMeet, isFalse);
+
+      // 序列化必须保留服务端原始状态码，不能被退化成空串
+      expect(order.toJson()['orderStatus'], equals('REFUNDING'));
+      expect(order.copyWith().statusCode, equals('REFUNDING'));
+    });
+
+    test('OrderVO falls back to the raw status code when no description is sent',
+        () {
+      final order = OrderVO.fromJson({
+        'id': 1,
+        'orderNo': 'ORD_RAW',
+        'goodsId': 2,
+        'goodsTitleSnapshot': '无描述未知订单',
+        'goodsPriceSnapshot': 10.0,
+        'orderStatus': 'DISPUTED',
+      });
+
+      expect(order.orderStatus, equals(OrderStatus.unknown));
+      expect(order.statusText, equals('DISPUTED'),
+          reason: '未知状态没有服务端描述时，展示原文而不是"未知状态"这类占位词');
     });
 
     test('OrderStatus labels should match business specifications', () {

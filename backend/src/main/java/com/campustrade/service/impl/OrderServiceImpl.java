@@ -1,5 +1,7 @@
 package com.campustrade.service.impl;
 
+import com.campustrade.common.constant.CreditRule;
+import com.campustrade.enums.GoodsStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -91,7 +93,7 @@ public class OrderServiceImpl implements OrderService {
         }
 
         // 3. 校验商品状态是否为 ON_SALE (在售)
-        if (!"ON_SALE".equalsIgnoreCase(goods.getStatus())) {
+        if (!GoodsStatus.ON_SALE.matches(goods.getStatus())) {
             throw new OrderBusinessException(400, "商品非在售状态，无法下单");
         }
 
@@ -238,7 +240,7 @@ public class OrderServiceImpl implements OrderService {
             Goods latest = goodsMapper.selectById(order.getGoodsId());
             if (latest == null) {
                 log.warn("订单取消后未能恢复商品在售：商品记录已不存在: orderId={}, goodsId={}", orderId, order.getGoodsId());
-            } else if ("ON_SALE".equalsIgnoreCase(latest.getStatus())) {
+            } else if (GoodsStatus.ON_SALE.matches(latest.getStatus())) {
                 log.info("订单取消时商品已处于在售状态，无需恢复（幂等）: orderId={}, goodsId={}", orderId, order.getGoodsId());
             } else {
                 log.error("订单取消后商品状态无法自动恢复: orderId={}, goodsId={}, currentStatus={}",
@@ -252,7 +254,7 @@ public class OrderServiceImpl implements OrderService {
         if (previousStatus == OrderStatus.WAIT_MEET) {
             creditService.deductCredit(
                     operatorId,
-                    1,
+                    CreditRule.TRADE_CANCEL_PENALTY,
                     CreditChangeType.TRADE_CANCEL_PENALTY,
                     "ORDER",
                     order.getId(),
@@ -306,10 +308,11 @@ public class OrderServiceImpl implements OrderService {
                     "订单已完成，但商品当前状态为[" + currentStatus + "]，无法标记为已售出，请联系平台处理");
         }
 
-        // 买家与卖家双方信用积分 + 2, completed_count + 1, trade_count + 1, 并沉淀审计流水
+        // 买家与卖家双方信用积分 + TRADE_COMPLETED_BONUS, completed_count + 1, trade_count + 1, 并沉淀审计流水
+        // 加分幅度取自 CreditRule（信用规则数值的唯一真相源）
         creditService.addCredit(
                 order.getBuyerId(),
-                2,
+                CreditRule.TRADE_COMPLETED_BONUS,
                 CreditChangeType.TRADE_COMPLETED,
                 "ORDER",
                 order.getId(),
@@ -317,7 +320,7 @@ public class OrderServiceImpl implements OrderService {
         );
         creditService.addCredit(
                 order.getSellerId(),
-                2,
+                CreditRule.TRADE_COMPLETED_BONUS,
                 CreditChangeType.TRADE_COMPLETED,
                 "ORDER",
                 order.getId(),

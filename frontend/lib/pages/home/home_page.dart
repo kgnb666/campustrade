@@ -4,6 +4,7 @@ import '../../config/app_config.dart';
 import '../../controllers/auth_controller.dart';
 import '../../routes/app_routes.dart';
 import '../../widgets/status_badge.dart';
+import '../../models/status_enums.dart';
 
 /// CampusTrade 首页 (Stage 1: 用户中心与校园认证就绪)
 class HomePage extends StatelessWidget {
@@ -76,7 +77,7 @@ class HomePage extends StatelessWidget {
                   final user = authController.currentUser.value;
 
                   if (isLoggedIn && user != null) {
-                    final isVerified = user.verifyStatus == 'SUCCESS';
+                    final isVerified = VerifyStatus.fromCode(user.verifyStatus).isVerified;
                     return Card(
                       color: theme.colorScheme.primaryContainer.withAlpha(50),
                       elevation: 0,

@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import '../../controllers/history_controller.dart';
 import '../../models/history_model.dart';
 import '../../routes/app_routes.dart';
+import '../../models/status_enums.dart';
 
 /// 浏览足迹页面
 class HistoryPage extends StatefulWidget {
@@ -99,7 +100,9 @@ class _HistoryPageState extends State<HistoryPage> {
 
   Widget _buildHistoryCard(BuildContext context, HistoryItemModel item) {
     final theme = Theme.of(context);
-    final isOffShelf = item.status != 'ON_SALE';
+    // 只有 OFF_SHELF 显示「已下架」；已售出等其它不可购买状态显示各自文案
+    final unavailableStatus = GoodsStatus.fromCode(item.status);
+    final showUnavailableBadge = unavailableStatus?.isUnavailable ?? true;
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -176,7 +179,7 @@ class _HistoryPageState extends State<HistoryPage> {
                                   ),
                                 ),
                               ),
-                              if (isOffShelf) ...[
+                              if (showUnavailableBadge) ...[
                                 const SizedBox(width: 6),
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -184,9 +187,9 @@ class _HistoryPageState extends State<HistoryPage> {
                                     color: Colors.grey.shade200,
                                     borderRadius: BorderRadius.circular(4),
                                   ),
-                                  child: const Text(
-                                    '已下架',
-                                    style: TextStyle(fontSize: 10, color: Colors.grey),
+                                  child: Text(
+                                    GoodsStatus.labelOf(item.status),
+                                    style: const TextStyle(fontSize: 10, color: Colors.grey),
                                   ),
                                 ),
                               ],
