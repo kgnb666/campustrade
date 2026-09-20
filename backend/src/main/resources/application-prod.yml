@@ -3,23 +3,136 @@
 #
 #  启用方式：环境变量 SPRING_PROFILES_ACTIVE=prod
 #
-#  校园认证验证码在生产环境只有一条合法路径：经 SMTP 真实发送到学生校园邮箱。
-#  verify.mail-enabled=false 会让验证码落到服务端日志文件里（任何能读日志的人都能
-#  零成本完成认证），且邮件发送失败时绝不允许降级为"把验证码写进日志或响应"。
-#  因此这里显式把邮件通道置为 true，并由 com.campustrade.config.VerifyMailProdGuard
-#  在启动期做 fail-fast 校验（与阶段 2 的 JWT 密钥 fail-fast 风格一致）：
-#    - verify.mail-enabled=false                → 拒绝启动
-#    - mail-enabled=true 但 MAIL_* 缺项          → 拒绝启动
+#  本文件的三条原则：
+#   1. 【无可用默认值】数据库 / Redis / MinIO / JWT 等敏感项一律写成
+#      ${ENV_VAR:} 空默认值：本文件里不存在任何"能连上某个真实服务"的取值，
+#      漏配时是"连不上"而不是"连到了本机开发库"。
+#   2. 【缺失即拒绝启动】空值不会被静默接受：
+#      - com.campustrade.config.ProdSecretsGuard（本文件同目录）在启动期校验
+#        连接目标与凭据是否齐备、是否仍是 .env.example 的 CHANGE_ME 占位符，
+#        缺失时打印中文提示并直接拒绝启动；
+#      - JWT 密钥由 JwtTokenProvider 的 fail-fast 校验（缺失/短于 32 字节/命中历史默认密钥）；
+#      - SMTP 由 VerifyMailProdGuard 的 fail-fast 校验（下方 verify.mail-enabled: true）。
+#   3. 【日志不泄密】日志级别固定 INFO，并关闭 MyBatis 的 SQL DEBUG 打印：
+#      SQL 日志会带出参数值（手机号、口令哈希、验证码等），生产环境不应出现。
 #
-#  生产必须由部署平台注入的 SMTP 环境变量清单（不要写进任何配置文件或镜像）：
-#    MAIL_HOST      SMTP 服务器主机，例如 smtp.exmail.qq.com
-#    MAIL_PORT      SMTP 端口，465(SSL 直连) / 587(STARTTLS)
-#    MAIL_USERNAME  SMTP 登录账号
-#    MAIL_PASSWORD  SMTP 登录口令 / 授权码
-#    MAIL_FROM      发件人地址（通常与 MAIL_USERNAME 相同）
-#    MAIL_SSL_ENABLED  可选，465 端口保持默认 true；587 端口置为 false
+#  生产必须由部署平台注入的环境变量清单（不要写进任何配置文件或镜像）：
+#    数据库   SPRING_DATASOURCE_HOST / SPRING_DATASOURCE_PORT / SPRING_DATASOURCE_DATABASE
+#             SPRING_DATASOURCE_USERNAME / SPRING_DATASOURCE_PASSWORD
+#    缓存     SPRING_DATA_REDIS_HOST / SPRING_DATA_REDIS_PORT / SPRING_DATA_REDIS_PASSWORD
+#    对象存储 MINIO_ENDPOINT / MINIO_ROOT_USER / MINIO_ROOT_PASSWORD / MINIO_BUCKET_NAME
+#             MINIO_URL_PREFIX（对外可访问的图片前缀，必须是真实域名，否则前端图片全裂）
+#    认证     JWT_SECRET（openssl rand -hex 32）
+#    邮件     MAIL_HOST / MAIL_PORT / MAIL_USERNAME / MAIL_PASSWORD / MAIL_FROM
+#             （465 端口保持 MAIL_SSL_ENABLED 默认 true；587(STARTTLS) 置为 false）
+#    跨域     CORS_ALLOWED_ORIGINS（真实域名清单，绝不可是 "*"）
+#  可选：DEEPSEEK_API_KEY（不注入则 AI 能力优雅降级）、SPRING_DATASOURCE_MAX_POOL_SIZE 等调优项。
 # ==============================================================================
 
+server:
+  # 收到 SIGTERM 后先停止接收新请求再退出，配合编排的 stop_grace_period 使用
+  shutdown: graceful
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  datasource:
+    # 连接目标与凭据全部来自环境变量：本文件不留任何可用的本机默认值
+    url: jdbc:postgresql://${SPRING_DATASOURCE_HOST:}:${SPRING_DATASOURCE_PORT:}/${SPRING_DATASOURCE_DATABASE:}?currentSchema=${SPRING_DATASOURCE_SCHEMA:campus_trade}&reWriteBatchedInserts=true
+    username: ${SPRING_DATASOURCE_USERNAME:}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    hikari:
+      # 生产连接池收敛：并发更高但单连接超时必须更短，避免请求线程被慢查询拖死
+      maximum-pool-size: ${SPRING_DATASOURCE_MAX_POOL_SIZE:20}
+      minimum-idle: ${SPRING_DATASOURCE_MIN_IDLE:5}
+      connection-timeout: 10000      # 取连接最长等 10 秒（开发 30 秒，生产快速失败）
+      validation-timeout: 3000
+      idle-timeout: 300000           # 5 分钟
+      max-lifetime: 1200000          # 20 分钟，短于常见 LB/防火墙的 30 分钟空闲断连
+      keepalive-time: 120000
+      # 启动即校验连接：凭据/网络有问题时立刻启动失败，而不是等到第一个请求
+      initialization-fail-timeout: 10000
+
+  flyway:
+    # 生产禁止自动 baseline：一个"非空且没有 flyway_schema_history"的库意味着
+    # 库结构来路不明（手工建表 / 从别处拷贝），此时必须人工确认，
+    # 而不是给它打个 version=0 的基线再把 V1..V11 跑一遍。
+    baseline-on-migrate: false
+    validate-on-migrate: true
+
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:}
+      port: ${SPRING_DATA_REDIS_PORT:}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+      # 命令超时收敛到 3 秒（base 为 5 秒）：Redis 抖动时快速失败，
+      # 不让业务线程把时间耗在等待缓存上。
+      timeout: 3000ms
+      # 注意：这里刻意不写 lettuce.pool.* —— 项目未引入 commons-pool2，
+      # 连接池配置会被 Spring Boot 静默忽略（属于"看起来配了其实没生效"的假象）。
+      # Lettuce 默认使用单条线程安全的复用连接，本项目的缓存访问量下足够；
+      # 若日后需要连接池，应先显式引入 commons-pool2 再配置。
+
+# ------------------------------------------------------------------------------
+# 校园认证验证码在生产环境只有一条合法路径：经 SMTP 真实发送到学生校园邮箱。
+# verify.mail-enabled=false 会让验证码落到服务端日志文件里（任何能读日志的人都能
+# 零成本完成认证），且邮件发送失败时绝不允许降级为"把验证码写进日志或响应"。
+# 因此这里显式把邮件通道置为 true，并由 VerifyMailProdGuard 做启动期 fail-fast 校验：
+#   - verify.mail-enabled=false                → 拒绝启动
+#   - mail-enabled=true 但 MAIL_* 缺项          → 拒绝启动
+# ------------------------------------------------------------------------------
 verify:
-  # 生产必须走真实邮件通道：置为 false 会导致服务拒绝启动
   mail-enabled: true
+
+# ------------------------------------------------------------------------------
+# MinIO：端点、凭据、桶名、对外前缀全部来自环境变量，无本机默认值。
+# url-prefix 尤其关键：它被拼进返回给前端的图片地址，若沿用开发默认值
+# （http://127.0.0.1:9000/...），生产环境浏览器取图将全部失败。
+# ------------------------------------------------------------------------------
+minio:
+  endpoint: ${MINIO_ENDPOINT:}
+  access-key: ${MINIO_ROOT_USER:}
+  secret-key: ${MINIO_ROOT_PASSWORD:}
+  bucket-name: ${MINIO_BUCKET_NAME:}
+  url-prefix: ${MINIO_URL_PREFIX:}
+
+# ------------------------------------------------------------------------------
+# JWT：只从环境变量读取，本文件同样不提供默认值（base 的 application.yml 也已是空默认）。
+# 密钥强度与历史默认密钥拦截见 JwtTokenProvider#init。
+# ------------------------------------------------------------------------------
+jwt:
+  secret: ${JWT_SECRET:}
+
+# ------------------------------------------------------------------------------
+# CORS：生产必须显式列出真实域名。allowCredentials 恒为 true，因此绝不允许 "*"。
+# ------------------------------------------------------------------------------
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:}
+
+# ------------------------------------------------------------------------------
+# DeepSeek AI：可选能力。未注入 API Key 时 DeepSeekClient 优雅降级（返回业务错误），
+# 这里不再保留开发用的占位符字面量。
+# ------------------------------------------------------------------------------
+deepseek:
+  api-key: ${DEEPSEEK_API_KEY:}
+
+# ------------------------------------------------------------------------------
+# 日志：固定 INFO，并关闭 MyBatis 的 SQL 打印。
+#   - logging.level.com.baomidou.mybatisplus: 由开发环境的 DEBUG 收敛为 WARN；
+#   - mybatis-plus.configuration.log-impl: 置为 NoLoggingImpl，
+#     即使有人误把级别调成 DEBUG，也不会再把 SQL 与其参数值打到日志里。
+# ------------------------------------------------------------------------------
+logging:
+  level:
+    root: INFO
+    com.campustrade: INFO
+    com.baomidou.mybatisplus: WARN
+    org.apache.ibatis: WARN
+    org.springframework: INFO
+    org.springframework.web: INFO
+    org.springframework.security: WARN
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.nologging.NoLoggingImpl

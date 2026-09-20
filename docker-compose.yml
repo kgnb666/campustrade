@@ -1,57 +1,105 @@
+# ==============================================================================
+#  CampusTrade 本地开发编排（docker compose up -d）
+#
+#  定位：只服务于本机开发。三个中间件端口一律绑定 127.0.0.1，不对外网暴露；
+#        所有凭据都从项目根目录 .env 注入，本文件里不保留任何可用口令字面量。
+#        生产编排见 docker-compose.prod.yml。
+#
+#  使用前提：先把 .env.example 复制成 .env（cp .env.example .env），并至少填好
+#            POSTGRES_PASSWORD / MINIO_ROOT_USER / MINIO_ROOT_PASSWORD / REDIS_PASSWORD。
+#            缺项时 compose 会直接报错退出（下方 ${VAR:?…} 语法），
+#            而不是静默使用一个弱口令把库跑起来。
+#
+#  业务表结构不在本文件职责内：由后端启动时的 Flyway 迁移（V1..V11）创建。
+#  docker/postgres/init.sql 只负责建 campus_trade schema 与授权。
+#
+#  镜像版本一律固定到具体 tag（不用 latest）：中间件镜像偷偷升级是"昨天还好、
+#  今天启动即崩"的典型来源，升级应当是一次显式改动。
+# ==============================================================================
+
 services:
   # 1. 关系型数据库：PostgreSQL 16
   postgres:
-    image: postgres:16
+    # 16.15 = 当前开发数据卷实际运行的版本，固定到补丁号避免隐式跨补丁升级
+    image: postgres:16.15
     container_name: campustrade-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: campustrade
-      POSTGRES_USER: campustrade
-      POSTGRES_PASSWORD: campustrade123
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required - copy .env.example to .env}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required - copy .env.example to .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - copy .env.example to .env}
       TZ: Asia/Shanghai
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # 只绑回环地址：本机可连，同一局域网/公网的其它机器连不上
+      - "127.0.0.1:${POSTGRES_PORT:-15435}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U campustrade -d campustrade"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        # 容器日志轮转：单文件 10MB、最多保留 3 个，避免长期开发把磁盘写满
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
     networks:
       - campustrade-network
 
   # 2. 高速缓存与会话：Redis 7
   redis:
-    image: redis:7
+    image: redis:7.4.11
     container_name: campustrade-redis
     restart: unless-stopped
-    command: redis-server --appendonly yes
+    # 开发库同样开启口令：Redis 默认无认证，一旦端口被转发出去就是"任意读写"。
+    # 口令由 .env 的 REDIS_PASSWORD 注入，并与后端 SPRING_DATA_REDIS_PASSWORD 同源。
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required - copy .env.example to .env}"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required - copy .env.example to .env}
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
     networks:
       - campustrade-network
 
   # 3. 分布式对象存储：MinIO (商品图片与附件存储)
   minio:
-    image: minio/minio:latest
+    # 固定到具体 release：latest 会在某次重启时静默换版本（含数据格式变更风险）
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
     container_name: campustrade-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-campustrade}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-campustrade123}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required - copy .env.example to .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required - copy .env.example to .env}
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      # 控制台(9001)与 S3 API(9000)都只绑回环地址
+      - "127.0.0.1:${MINIO_PORT:-9000}:9000"
+      - "127.0.0.1:${MINIO_CONSOLE_PORT:-9001}:9001"
     volumes:
       - minio_data:/data
     healthcheck:
@@ -59,10 +107,21 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1g
     networks:
       - campustrade-network
 
 volumes:
+  # 显式命名：与用户已有开发数据卷保持一致，绝不要在改动编排时重建它们
   postgres_data:
     name: campustrade_postgres_data
   redis_data:

@@ -1,6 +1,10 @@
 # Environment variables
 .env
 .env.local
+# Machine-local toolchain paths (JAVA_HOME / MAVEN_HOME / FLUTTER_ROOT), read by
+# scripts/toolchain.ps1, backend/resolve-toolchain.cmd and frontend/run-frontend.cmd.
+# It holds absolute paths of THIS machine only, so it is never committed.
+.env.tools
 
 # IDE & Editors
 .idea/

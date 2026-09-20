@@ -1,9 +1,16 @@
 ﻿# ==============================================================================
 # CampusTrade 校园二手交易平台 - 一键停止 PowerShell 脚本
+#
+# 约定：外部命令（docker compose stop）一律检查退出码，失败给出中文提示并以非 0 退出。
+#       本文件为 UTF-8 with BOM，请勿改成其它编码。
 # ==============================================================================
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 $rootDir = $PSScriptRoot
+. (Join-Path $rootDir "scripts\toolchain.ps1")
+Import-LocalToolchainEnv -RootDir $rootDir | Out-Null
+
+$script:failed = $false
 
 Write-Host "==============================================================================" -ForegroundColor Red
 Write-Host "          CampusTrade 校园二手交易平台 - 一键停止控制台" -ForegroundColor Red
@@ -36,12 +43,45 @@ if (-not $owner) {
 
 # 2. 停止 Docker 容器
 Write-Host "`n[2/2] 正在停止 Docker 基础设施容器 (PostgreSQL, Redis, MinIO)..." -ForegroundColor Cyan
-Set-Location $rootDir
-docker compose stop
-Write-Host "[成功] Docker 容器已安全停止。" -ForegroundColor Green
+$dockerCmd = Resolve-DockerCmd
+if (-not $dockerCmd) {
+    Write-Host "[错误] 未找到 docker 命令：请安装 Docker Desktop 并确保 docker 在 PATH 中。" -ForegroundColor Red
+    Write-Host "       容器未做任何处理（如果它们之前由 Docker Desktop 启动，请在 Docker 面板里关闭）。" -ForegroundColor Red
+    exit 1
+}
+if (-not (Test-DockerAvailable -DockerCmd $dockerCmd)) {
+    Write-Host "[错误] docker 命令存在但 Docker 引擎不可用（Docker Desktop 未启动？）。" -ForegroundColor Red
+    Write-Host "       容器未做任何处理，请先启动 Docker Desktop 后重试。" -ForegroundColor Red
+    exit 1
+}
 
-Write-Host "`n==============================================================================" -ForegroundColor Red
+Push-Location $rootDir
+try {
+    & $dockerCmd compose stop
+    $code = $LASTEXITCODE
+} finally {
+    Pop-Location
+}
+
+if ($code -ne 0) {
+    Write-Host "[错误] docker compose stop 失败（退出码 $code），容器可能仍在运行。" -ForegroundColor Red
+    Write-Host "       请执行 docker compose ps 查看当前状态，或到 Docker Desktop 面板手动停止。" -ForegroundColor Red
+    $script:failed = $true
+} else {
+    Write-Host "[成功] Docker 容器已安全停止（数据卷保留，数据不会丢失）。" -ForegroundColor Green
+}
+
+Write-Host "`n==============================================================================" -ForegroundColor $(if ($script:failed) { "Red" } else { "Red" })
+if ($script:failed) {
+    Write-Host "停止过程中出现错误，请按上方提示处理。" -ForegroundColor Red
+    Write-Host "==============================================================================" -ForegroundColor Red
+    Write-Host ""
+    exit 1
+}
 Write-Host "所有 CampusTrade 本地开发服务已安全停止。" -ForegroundColor Red
-Write-Host "若需彻底清理容器与网络，可运行: docker compose down" -ForegroundColor Gray
+Write-Host "如需彻底清理容器与网络，可运行: docker compose down" -ForegroundColor Gray
+Write-Host "  注意：千万不要加 -v 参数（docker compose down -v 会删除 campustrade_* 数据卷，" -ForegroundColor Yellow
+Write-Host "        本地开发库与 MinIO 里的图片会一并消失）。" -ForegroundColor Yellow
 Write-Host "==============================================================================" -ForegroundColor Red
 Write-Host ""
+exit 0

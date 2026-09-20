@@ -1,0 +1,10 @@
+# Spring Boot 扩展注册文件（src/main/resources/META-INF/spring.factories）
+#
+# 生产环境敏感配置守卫：在"环境已就绪、上下文尚未刷新"时校验数据库/Redis/MinIO/CORS 等
+# 环境变量是否齐备，缺失即拒绝启动（详见 com.campustrade.config.ProdSecretsGuard 的类注释）。
+# 这里用 EnvironmentPostProcessor 而不是普通 @Component，是因为后者会在 Flyway 之后才执行，
+# 漏配时只会抛出难懂的 JDBC 报错。
+#
+# 非 prod profile（含测试的 test profile）下该守卫直接返回，不做任何校验，因此不影响 mvn test。
+org.springframework.boot.env.EnvironmentPostProcessor=\
+com.campustrade.config.ProdSecretsGuard

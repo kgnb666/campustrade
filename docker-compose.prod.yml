@@ -1,0 +1,250 @@
+# ==============================================================================
+#  CampusTrade 生产编排（app + postgres + redis + minio）
+#
+#  适用场景：单机/单节点部署（云主机、内网服务器）。集群编排（K8s）不在本文件范围。
+#
+#  用法（在服务器上执行）：
+#      # 方式一：把变量导出到当前 shell（推荐，变量不落盘）
+#      export POSTGRES_PASSWORD='...' REDIS_PASSWORD='...' MINIO_ROOT_PASSWORD='...' \
+#             MINIO_ROOT_USER='...' MINIO_BUCKET_NAME='campustrade' \
+#             MINIO_URL_PREFIX='https://img.example.com/campustrade' \
+#             JWT_SECRET="$(openssl rand -hex 32)" \
+#             CORS_ALLOWED_ORIGINS='https://app.example.com' \
+#             MAIL_HOST='smtp.exmail.qq.com' MAIL_PORT=465 MAIL_USERNAME='...' \
+#             MAIL_PASSWORD='...' MAIL_FROM='...'
+#      docker compose -f docker-compose.prod.yml up -d
+#
+#      # 方式二：使用独立的变量文件（不要复用开发用的 .env）
+#      docker compose -f docker-compose.prod.yml --env-file /etc/campustrade/prod.env up -d
+#
+#  ⚠️ 注意：compose 默认会自动读取项目根目录的 .env（那是本地开发用的开发口令）。
+#     在服务器上部署时请用 --env-file 指向生产变量文件，或先导出变量再执行，
+#     避免生产环境意外使用开发口令。
+#
+#  与本地开发编排（docker-compose.yml）的关键差异：
+#   1. 中间件**不发布任何端口**：postgres/redis/minio 只在内部网络可达，
+#      宿主机与公网都连不上（开发编排是 127.0.0.1 绑定）；
+#   2. 后端以 prod profile 运行：ProdSecretsGuard / VerifyMailProdGuard / JwtTokenProvider
+#      三处 fail-fast 在启动期校验敏感项，缺失即拒绝启动；
+#   3. 数据卷、网络、容器名与开发环境完全隔离（campustrade_prod_*），
+#      绝不复用开发卷 —— 避免一次误操作把开发数据当生产库用；
+#   4. 镜像 tag 全部固定到具体版本，不用 latest；
+#   5. 全服务开启日志轮转与资源上限，避免单容器把宿主机拖垮。
+#
+#  ⚠️ 下面的 name 不是装饰：compose 的 project name 默认取目录名，而开发编排
+#  （docker-compose.yml）在同一目录下也取同一个名字。若不显式区分，一个
+#  `docker compose -f docker-compose.prod.yml down` 会按 project 标签把**开发容器**
+#  一并停掉/删除（因为两者 project 标签相同）。固定成 campustrade-prod 后，
+#  生产与开发各自独立，down/up 互不影响。
+# ==============================================================================
+name: campustrade-prod
+
+services:
+  # ----------------------------------------------------------------------------
+  # 后端应用（prod profile）
+  # ----------------------------------------------------------------------------
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # 固定 tag：发布新版本时改 APP_IMAGE_TAG（或直接改这里的版本号），不要用 latest
+    image: campustrade-backend:${APP_IMAGE_TAG:-0.0.1}
+    container_name: campustrade-prod-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      # 数据库（指向内部服务名，不是 127.0.0.1）
+      SPRING_DATASOURCE_HOST: postgres
+      SPRING_DATASOURCE_PORT: "5432"
+      SPRING_DATASOURCE_DATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?POSTGRES_USER is required}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      SPRING_DATASOURCE_SCHEMA: campus_trade
+      # Redis（必须带口令：容器间网络同样不允许匿名访问）
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: "6379"
+      SPRING_DATA_REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      # MinIO
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      MINIO_BUCKET_NAME: ${MINIO_BUCKET_NAME:?MINIO_BUCKET_NAME is required}
+      # 对外图片前缀：返回给浏览器的地址，必须是真实可达的域名（见 ProdSecretsGuard）
+      MINIO_URL_PREFIX: ${MINIO_URL_PREFIX:?MINIO_URL_PREFIX is required}
+      # 认证与跨域
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?CORS_ALLOWED_ORIGINS is required}
+      # 校园认证邮件（verify.mail-enabled 由 application-prod.yml 固定为 true）
+      MAIL_HOST: ${MAIL_HOST:-}
+      MAIL_PORT: ${MAIL_PORT:-465}
+      MAIL_USERNAME: ${MAIL_USERNAME:-}
+      MAIL_PASSWORD: ${MAIL_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      MAIL_SSL_ENABLED: ${MAIL_SSL_ENABLED:-true}
+      TZ: Asia/Shanghai
+      # 容器内存上限的 75% 作为 JVM 堆上限（见 Dockerfile 的 JAVA_OPTS）
+      JAVA_OPTS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
+    ports:
+      # 应用端口对外发布（前端/反向代理需要访问）；如前置了 Nginx，可改为 "127.0.0.1:8080:8080"
+      - "${APP_PORT:-8080}:8080"
+    volumes:
+      # 应用日志落地（logback 写 /app/logs/campustrade.log），与只读根文件系统配合
+      - app_logs:/app/logs
+    # 容器根文件系统只读：运行期不需要写任何镜像内文件
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    # 与 application-prod.yml 的 server.shutdown=graceful / timeout-per-shutdown-phase: 30s 对齐
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/school/list"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1536m
+    networks:
+      - campustrade-prod-network
+
+  # ----------------------------------------------------------------------------
+  # PostgreSQL 16（无端口发布）
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:16.15
+    container_name: campustrade-prod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      TZ: Asia/Shanghai
+    # 刻意不写 ports：数据库只在内部网络可达，宿主机与公网都连不上。
+    # 需要临时运维时用 `docker compose -f docker-compose.prod.yml exec postgres psql -U ...`
+    # 或 `docker compose -f docker-compose.prod.yml port` / 一次性 `--publish`，不要长期开端口。
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+    networks:
+      - campustrade-prod-network
+
+  # ----------------------------------------------------------------------------
+  # Redis 7（无端口发布 + 强制口令）
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:7.4.11
+    container_name: campustrade-prod-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}", "--maxmemory-policy", "noeviction"]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      TZ: Asia/Shanghai
+    # maxmemory-policy=noeviction：Redis 里同时存着登录失败计数、验证码与限流键，
+    # 这些键被"自动淘汰"等于安全策略静默失效；内存打满时宁可写入报错（可观测），
+    # 也不要悄悄丢掉安全计数。内存上限见下方 deploy.resources（1g）。
+    # 阶段 7 提示：SSD 环境如需纠正 random_page_cost，见 README 的生产运维建议。
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1g
+    networks:
+      - campustrade-prod-network
+
+  # ----------------------------------------------------------------------------
+  # MinIO（无端口发布；控制台不对公网开放）
+  # ----------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    container_name: campustrade-prod-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?MINIO_ROOT_USER is required}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      TZ: Asia/Shanghai
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
+    networks:
+      - campustrade-prod-network
+
+volumes:
+  # 显式命名且与开发环境完全隔离：绝不复用 campustrade_* 开发卷
+  postgres_data:
+    name: campustrade_prod_postgres_data
+  redis_data:
+    name: campustrade_prod_redis_data
+  minio_data:
+    name: campustrade_prod_minio_data
+  app_logs:
+    name: campustrade_prod_app_logs
+
+networks:
+  campustrade-prod-network:
+    name: campustrade-prod-network
+    driver: bridge

@@ -1,0 +1,8 @@
+# 构建上下文 = backend/：只把 pom.xml 与 src/ 送进镜像，其余（target/、logs/、.m2 缓存）不参与构建
+target/
+logs/
+*.log
+.mimosa/
+.git/
+Dockerfile
+.dockerignore

@@ -1,8 +1,14 @@
 name: CI
 
 # 最小质量门禁：后端测试 + 前端静态分析与测试
-# 说明：后端测试目前依赖真实的 PostgreSQL / Redis，因此用 GitHub Actions 的 services 提供；
-#       待测试隔离（Testcontainers）落地后可去掉 services 段。
+#
+# 后端测试的中间件（PostgreSQL / Redis / MinIO）由 Testcontainers 在测试 JVM 内现拉现用
+# （见 backend/src/test/java/com/campustrade/support/TestContainersConfig.java），
+# 因此这里不再需要 GitHub Actions 的 services 段，也不再注入 SPRING_DATASOURCE_* / SPRING_DATA_REDIS_*：
+# 容器地址与随机端口由 Testcontainers 动态注入，测试也更接近"干净库"的语义。
+#
+# ⚠️ 如果将来确实要用 services 提供中间件，请勿把口令写成字面量：
+#    本仓库的安全门禁会扫描硬编码凭据，CI 用的口令同样应当现取现用或走 secrets。
 on:
   push:
     branches: [ main, master, develop ]
@@ -13,39 +19,6 @@ jobs:
   backend:
     name: 后端测试 (Java 21 + Maven)
     runs-on: ubuntu-latest
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: campustrade
-          POSTGRES_USER: campustrade
-          POSTGRES_PASSWORD: campustrade
-        ports:
-          - 15435:5432
-        options: >-
-          --health-cmd "pg_isready -U campustrade -d campustrade"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:7
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    env:
-      SPRING_DATASOURCE_HOST: 127.0.0.1
-      SPRING_DATASOURCE_PORT: 15435
-      SPRING_DATASOURCE_DATABASE: campustrade
-      SPRING_DATASOURCE_USERNAME: campustrade
-      SPRING_DATASOURCE_PASSWORD: campustrade
-      SPRING_DATA_REDIS_HOST: 127.0.0.1
-      SPRING_DATA_REDIS_PORT: 6379
 
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +35,8 @@ jobs:
           cache: maven
 
       - name: 运行后端测试
+        # 测试需要 Docker（Testcontainers 拉取 postgres:16 / redis:7 / minio 一次性容器），
+        # ubuntu-latest 预装 Docker，无需额外步骤
         working-directory: backend
         run: mvn -B test
 

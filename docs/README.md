@@ -1,19 +1,27 @@
 # CampusTrade 校园二手交易平台 - 详细设计与技术文档
 
 本文档为 **CampusTrade（校园二手交易平台）** 的架构与技术环境规范说明。
+面向"想看懂这个项目怎么跑起来、怎么部署"的读者；操作步骤以项目根目录 [README.md](../README.md) 为准。
 
 ---
 
 ## 一、项目介绍
 
-CampusTrade 是一个面向高校大学生的校园闲置二手交易平台。系统旨在打造绿色循环、可信便捷的校园交易生态，核心规划功能包括：
-- **校园身份认证**：学号与校园邮箱/实名认证，保障校内真实交易身份；
-- **二手商品流转**：商品发布、成色评级、多图展示、校内分类检索；
-- **即时消息沟通**：买卖双方在线即时私聊、议价与预约自提地点；
-- **安全交易担保**：线上意向锁定、线下核验自提、评价信誉体系；
-- **AI 智能赋能**：集成 DeepSeek 等大语言模型，提供闲置估价、文案智能美化、智能反欺诈识别。
+CampusTrade 是一个面向高校大学生的校园闲置二手交易平台，核心功能已全部落地：
 
-当前版本为 **Stage 0：项目初始化阶段**，旨在建立标准、稳定的后端、前端与容器化基础设施，未夹杂任何具体业务逻辑。
+- **校园身份认证**：学号 + 校园邮箱验证码核验，验证码只走"真实邮件（生产） / 服务端日志（仅本地开发）"两条通道，
+  它是发布商品的硬前置，也是卖家"已认证"标识的唯一依据；
+- **二手商品流转**：商品发布（多图 + 分类 + 成色 + 标签）、列表 / 搜索 / 热搜、详情、上下架、
+  浏览足迹与收藏；
+- **交易订单闭环**：下单锁定 → 卖家确认 → 线下自提 → 完成 / 取消，含商品快照与状态机约束；
+- **信用与评价**：信用分变动流水（幂等约束）、双向评价、评价点赞、信用等级；
+- **平台治理**：统一举报工单（商品 / 评价 / 用户）、管理员处理与操作审计日志；
+- **AI 智能赋能**：接入 DeepSeek 完成闲置估价、文案智能美化、智能分类（未配置 API Key 时优雅降级）；
+- **安全与稳定性**：JWT 双令牌（access + refresh）与黑名单、登录失败锁定、注册限流、
+  统一异常与统一响应体、TraceId 贯穿日志、浏览量异步刷盘。
+
+各阶段成果：阶段 1 工程地基与 CI、阶段 2 认证安全、阶段 3 校园认证、阶段 4 数据一致性（V10）、
+阶段 5 契约收敛、阶段 6 前端稳定性、阶段 7 性能优化（V11）、阶段 8 生产交付与文档校正。
 
 ---
 
@@ -23,21 +31,21 @@ CampusTrade 是一个面向高校大学生的校园闲置二手交易平台。�
 +-------------------------------------------------------------+
 |                      CampusTrade 总体架构                    |
 +-------------------------------------------------------------+
-| 前端层 (Frontend): Flutter 3.x (Dart 3.x)                  |
-| - 状态管理 & 路由: GetX                                      |
-| - 网络请求: Dio                                             |
-| - 本地安全存储: Flutter Secure Storage                      |
-| - 平台支持: Web / Android / iOS / Desktop                   |
+| 前端层 (Frontend): Flutter 3.x (Dart 3.x)                    |
+| - 状态管理 & 路由: GetX                                       |
+| - 网络请求: Dio（拦截器 + Token 自动刷新）                     |
+| - 本地安全存储: Flutter Secure Storage                        |
+| - 平台支持: Web / Android / iOS / Desktop                     |
 +-------------------------------------------------------------+
                               |
-                              | HTTP RESTful APIs
+                              | HTTP RESTful APIs  (/api)
                               v
 +-------------------------------------------------------------+
-| 后端服务层 (Backend): Spring Boot 3.x (Java 21)             |
-| - ORM 数据持久层: MyBatis-Plus                              |
-| - 参数校验: Spring Boot Validation                          |
-| - 数据连接池: HikariCP                                       |
-| - 代码简化: Lombok                                          |
+| 后端服务层 (Backend): Spring Boot 3.3.4 (Java 21)             |
+| - ORM: MyBatis-Plus 3.5.7 / 连接池: HikariCP                  |
+| - 数据库迁移: Flyway（V1..V11，schema 单一真相源）             |
+| - 安全: Spring Security 6 + JJWT 0.12.6                       |
+| - 邮件: spring-boot-starter-mail（校园认证验证码）             |
 +-------------------------------------------------------------+
                               |
        +----------------------+----------------------+
@@ -45,11 +53,23 @@ CampusTrade 是一个面向高校大学生的校园闲置二手交易平台。�
        v                      v                      v
 +---------------+     +---------------+     +---------------+
 |  PostgreSQL   |     |    Redis 7    |     |  MinIO (S3)   |
-| 关系型数据库   |     | 缓存与高频会话|     | 对象文件存储   |
-| (Schema:      |     | (AOF 持久化)  |     | (商品图/附件) |
-| campus_trade) |     |               |     |               |
+| 关系型数据库   |     | 缓存与会话     |     | 对象文件存储   |
+| schema:       |     | 限流/验证码/   |     | 商品图/举报    |
+| campus_trade  |     | 锁/浏览计数    |     | 证据图         |
+| 端口 15435     |     | 端口 6379     |     | 端口 9000/9001 |
 +---------------+     +---------------+     +---------------+
 ```
+
+### 关键设计约定
+
+| 主题 | 约定 |
+| :--- | :--- |
+| **Schema 真相源** | 业务表结构只由 Flyway 迁移定义；`docker/postgres/init.sql` 仅建 `campus_trade` schema 与授权 |
+| **配置来源** | 只走环境变量（本地由 `.env` 注入）：`.env.example` 是变量清单模板，不含任何可用凭据 |
+| **环境隔离** | `prod` profile 下敏感项无可用默认值，缺失即拒绝启动（中文 fail-fast）；`test` profile 用 Testcontainers 自带中间件 |
+| **认证** | `JWT_SECRET` 必填（≥32 字节，拒绝历史默认密钥）；access 2h / refresh 7d；退出登录写黑名单 |
+| **统一响应** | 所有接口返回 `{code, message, data, timestamp}`；异常经 `GlobalExceptionHandler` 归一 |
+| **端口暴露** | 开发编排中间件仅绑 `127.0.0.1`；生产编排中间件不发布端口，只在内部网络可达 |
 
 ---
 
@@ -57,14 +77,14 @@ CampusTrade 是一个面向高校大学生的校园闲置二手交易平台。�
 
 | 组件 / 工具 | 推荐版本 | 说明 |
 | :--- | :--- | :--- |
-| **操作系统** | Windows 10/11, macOS, Linux | 跨平台开发 |
-| **JDK** | OpenJDK 21 LTS | 后端核心运行时 |
+| **操作系统** | Windows 10/11, macOS, Linux | 跨平台开发（一键脚本目前只覆盖 Windows） |
+| **JDK** | OpenJDK 21 LTS | 后端核心运行时（脚本按"环境变量 → PATH → 报错指引"解析） |
 | **构建工具** | Apache Maven 3.9+ | 依赖管理与打包 |
 | **Flutter** | Flutter 3.x (Dart 3.x) | 移动与多端开发 SDK |
-| **容器引擎** | Docker 24+ & Docker Compose v2+ | 中间件本地编排 |
-| **数据库** | PostgreSQL 16 | 核心业务数据库 |
-| **缓存** | Redis 7 | 缓存与即时通信会话 |
-| **对象存储** | MinIO (最新稳定版) | 本地兼容 S3 的分布式存储 |
+| **容器引擎** | Docker 24+ & Docker Compose v2+ | 中间件本地编排（后端测试用 Testcontainers，也需要可用的 Docker） |
+| **数据库** | PostgreSQL 16 | 核心业务数据库（开发映射到宿主 15435） |
+| **缓存** | Redis 7.4 | 缓存、限流、验证码、分布式锁（**已启用口令**） |
+| **对象存储** | MinIO `RELEASE.2024-10-13T13-34-11Z` | 兼容 S3 的私有存储（镜像 tag 固定，不用 latest） |
 
 ---
 
@@ -72,113 +92,174 @@ CampusTrade 是一个面向高校大学生的校园闲置二手交易平台。�
 
 ### 1. 基础设施启动（Docker Compose）
 
-在项目根目录下，先复制环境配置：
 ```bash
-cp .env.example .env
-```
-*(如宿主机本地已安装 PostgreSQL 占用了 5432 端口，可修改 `.env` 中的 `POSTGRES_PORT=15432`)*
-
-启动中间件服务容器：
-```bash
+cp .env.example .env     # 按注释替换 CHANGE_ME_* 占位值（至少填好数据库/Redis/MinIO 口令与 JWT_SECRET）
 docker compose up -d
-```
-
-查看容器运行状态：
-```bash
 docker compose ps
 ```
-服务控制台访问入口：
-- **PostgreSQL 16**: 宿主机端口 `5432`（或自定义端口）
-- **Redis 7**: 宿主机端口 `6379`
-- **MinIO Web Console**: `http://localhost:9001`（默认账号：`campustrade`，密码：`campustrade123`）
-- **MinIO S3 API**: `http://localhost:9000`
 
----
+服务与端口（**均只绑定 127.0.0.1**，局域网/公网不可达）：
+
+| 服务 | 地址 | 说明 |
+| :--- | :--- | :--- |
+| PostgreSQL 16 | `127.0.0.1:15435` | 库名 `campustrade`，schema `campus_trade`。宿主 5432 常被本机已有服务占用，故开发映射为 15435；`SPRING_DATASOURCE_PORT` 必须与 `POSTGRES_PORT` 一致 |
+| Redis 7 | `127.0.0.1:6379` | 需口令：`REDIS_PASSWORD`（容器 `--requirepass`）与后端 `SPRING_DATA_REDIS_PASSWORD` 必须一致 |
+| MinIO S3 API | `127.0.0.1:9000` | 桶名 `campustrade` |
+| MinIO 控制台 | `http://127.0.0.1:9001` | 账号/口令见 `.env`（`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`） |
+
+> 端口冲突时改 `.env` 里的 `POSTGRES_PORT` / `REDIS_PORT` / `MINIO_PORT` / `MINIO_CONSOLE_PORT`，
+> 同时把 `SPRING_DATASOURCE_PORT` / `SPRING_DATA_REDIS_PORT` / `MINIO_ENDPOINT` / `MINIO_URL_PREFIX` 改成对应值。
 
 ### 2. 后端服务启动
 
-进入后端目录：
 ```bash
 cd backend
+mvn -B test              # 242 项；中间件由 Testcontainers 现拉现用，不碰开发库
+mvn spring-boot:run      # 或双击 backend/run-backend.cmd（自动加载项目根目录 .env）
 ```
-
-执行单元与集成测试：
-```bash
-mvn test
-```
-
-本地启动 Spring Boot 服务：
-```bash
-mvn spring-boot:run
-```
-后端服务默认监听端口：`http://localhost:8080`
-
----
+后端监听 `http://127.0.0.1:8080`，上下文路径 `/api`。
+首次启动会由 Flyway 从空库执行 V1..V11 建出完整结构（详见第五节）。
 
 ### 3. 前端应用启动
 
-进入前端目录：
 ```bash
 cd frontend
-```
-
-安装 Flutter 依赖：
-```bash
 flutter pub get
+flutter analyze          # 期望 0 issue
+flutter test             # 142 项
+flutter run -d chrome    # 或双击 frontend/run-frontend.cmd run -d chrome
 ```
+Web 端 API 基址默认 `http://127.0.0.1:8080/api`（`lib/config/app_config.dart`），
+用 `--dart-define=API_BASE_URL=...` 覆盖；Web 部署（SPA 回退、Nginx、缓存）见 [frontend/README.md](../frontend/README.md)。
 
-代码质量分析：
-```bash
-flutter analyze
+---
+
+## 五、数据库与迁移
+
+### 5.1 单一真相源
+
+- **业务表结构唯一来源**：`backend/src/main/resources/db/migration/V1..V11__*.sql`。
+- `docker/postgres/init.sql`：只做 `CREATE SCHEMA IF NOT EXISTS campus_trade`、授权与默认 `search_path`，
+  **不含任何业务建表语句**。它仅在数据卷首次初始化时执行一次；删掉它，Flyway 也会自行创建 schema。
+  历史上这里曾复制过一份与 Flyway 重复的建表语句，已随阶段 8 移除（重复定义必然漂移）。
+- 生产 profile `spring.flyway.baseline-on-migrate: false`：库结构来路不明时启动失败，而不是自动打基线。
+
+### 5.2 迁移脚本
+
+| 版本 | 内容 |
+| :--- | :--- |
+| V1 | 用户与认证（`user`、`campus_school`、`student_verify`、`user_credit`） |
+| V2 | 商品与分类（`category`、`goods`、`goods_image`、`goods_tag`） |
+| V3 | 互动（`favorite`、`browse_history`、`search_history`） |
+| V4 | 订单（`trade_order` 及状态索引、活跃单唯一索引） |
+| V5 | 信用体系升级（`user_credit` 扩充字段、`user_credit_log` 幂等流水） |
+| V6 | 评价领域（`review`） |
+| V7 | 平台治理（`report`、`admin_audit_log`） |
+| V8 | 评价点赞（`review_like`） |
+| V9 | 新增高校（广西师范大学）种子数据 |
+| V10 | 数据一致性约束加固 |
+| V11 | 性能索引 |
+
+> 空库验证结论（阶段 8 实测）：在独立 compose project + 独立端口的全新实例上，
+> Flyway 从 0 张表一路执行到 V11，`flyway_schema_history` 记录 V1..V11 **全部 success**，
+> 建出 18 张表（17 张业务表 + 迁移历史表）与 63 个索引，随后 `GET /api/school/list` 返回 200。
+
+---
+
+## 六、生产交付
+
+| 交付物 | 说明 |
+| :--- | :--- |
+| `backend/Dockerfile` | 多阶段构建（maven + JDK 21 → JRE 21 alpine）；非 root（uid 10001）；`EXPOSE 8080`；内置 `HEALTHCHECK` 探活 `/api/school/list`；不含任何凭据 |
+| `docker-compose.prod.yml` | app + postgres + redis + minio；`depends_on: service_healthy`；中间件不发布端口；镜像 tag 固定；日志轮转与资源上限；Redis 强制口令；镜像 `campustrade-backend:<tag>` |
+| 生产 profile | `application-prod.yml` + `ProdSecretsGuard`：数据库/Redis/MinIO/CORS 缺项即拒绝启动；日志固定 INFO 且关闭 MyBatis SQL 打印；连接池与超时收敛 |
+| 前端 | `flutter build web` + SPA 回退部署说明见 `frontend/README.md` |
+
+部署步骤摘要见根 [README.md](../README.md) 的"生产部署步骤"一节，
+变量清单、运维建议（`random_page_cost=1.1`、备份机制缺失）也在该节。
+
+---
+
+## 七、项目目录说明
+
 ```
-
-启动 Chrome 调试（推荐 Web 快速验证）：
-```bash
-flutter run -d chrome
+CampusTrade/
+├── backend/                            # Spring Boot 3 + Java 21 后端
+│   ├── Dockerfile                      # 生产镜像（多阶段、非 root、健康检查）
+│   ├── .dockerignore                   # 构建上下文裁剪（排除 target/、logs/）
+│   ├── run-backend.cmd                 # 本地启动（ASCII；加载 .env、解析工具链）
+│   ├── resolve-toolchain.cmd           # JDK/Maven 解析（可单独运行诊断）
+│   ├── check-port.cmd                  # 8080 占用者诊断
+│   ├── docs/                           # 后端模块级说明
+│   ├── logs/                           # 运行日志（logs/campustrade.log，[DEV-ONLY] 验证码在此）
+│   ├── pom.xml
+│   └── src/
+│       ├── main/java/com/campustrade/
+│       │   ├── common/                 # Result / ResultCode / 常量（含 RedisKeyConstants）/ 工具
+│       │   ├── config/                 # MyBatis-Plus、Redis、MinIO、Jackson、WebMvc、
+│       │   │                           # DeepSeek、VerifyProperties、VerifyMailProdGuard、ProdSecretsGuard
+│       │   ├── controller/             # 17 个 REST 控制器（auth/user/student/goods/category/order/
+│       │   │                           # review/favorite/history/report/admin/ai/file/school）
+│       │   ├── dto/                    # 请求 DTO（按领域分包：order/ report/ review/）
+│       │   ├── entity/                 # 18 个实体（与 Flyway 表一一对应）
+│       │   ├── enums/                  # 领域枚举（订单/信用/举报/评价/商品状态）
+│       │   ├── event/ listener/        # 领域事件与监听（评价 -> 信用变动）
+│       │   ├── exception/              # BusinessException / OrderBusinessException / 全局异常处理
+│       │   ├── mapper/                 # MyBatis-Plus Mapper（含 GoodsSqlProvider）
+│       │   ├── security/               # Spring Security 配置、JWT 过滤器与 Provider
+│       │   ├── service/                # 业务接口与实现（含 ai/ 子包与定时任务）
+│       │   └── vo/                     # 视图对象
+│       ├── main/resources/
+│       │   ├── application.yml          # 基础配置（本地开发默认值）
+│       │   ├── application-prod.yml     # 生产覆盖（敏感项无默认值、日志收敛）
+│       │   ├── logback-spring.xml        # 控制台 + 按天滚动文件（UTF-8）
+│       │   ├── META-INF/spring.factories # 注册生产敏感配置守卫（EnvironmentPostProcessor）
+│       │   └── db/migration/V1..V11__*.sql # 建表唯一真相源
+│       └── test/
+│           ├── java/com/campustrade/    # 测试用例 + support/（Testcontainers 装配）
+│           └── resources/               # application-test.yml、spring.factories 等
+├── frontend/                           # Flutter 3 多端前端
+│   ├── README.md                       # 前端说明 + Web 部署（flutter build web / SPA 回退）
+│   ├── run-frontend.cmd                # 启动转发（ASCII；解析 FLUTTER_ROOT/PATH）
+│   ├── lib/
+│   │   ├── api/                        # Dio 封装与各领域 API 定义
+│   │   ├── config/                     # AppConfig（API 基址、分页常量等）
+│   │   ├── models/                     # 数据模型
+│   │   ├── pages/                      # 页面（首页/搜索/详情/发布/订单/消息/个人中心/认证…）
+│   │   ├── routes/                     # GetX 路由
+│   │   ├── services/                   # 网络、存储、登录态等全局服务
+│   │   ├── utils/ widgets/             # 工具与通用组件
+│   │   └── main.dart
+│   ├── test/                           # Widget/单元测试（142 项）
+│   └── web/                            # Web 入口（index.html、manifest、icons）
+├── docker/
+│   └── postgres/init.sql               # 仅 CREATE SCHEMA + 授权（无业务建表语句）
+├── docs/                               # 设计与阶段报告
+│   ├── README.md                       # 本文件
+│   ├── final-audit/                    # 阶段终审报告
+│   └── stage3*/ stage4/ stage5/ stage6/ # 各阶段过程报告
+├── scripts/
+│   ├── toolchain.ps1                   # 工具链解析（环境变量 → PATH → 报错指引）
+│   └── quality-gate.ps1                # 质量门禁唯一入口（后端测试 + 前端分析 + 前端测试）
+├── .env.example                        # 环境变量模板（占位符，无可用凭据）
+├── .env.tools                          # （本机私有，已 git-ignore）工具链路径
+├── docker-compose.yml                  # 本地开发编排（127.0.0.1 + Redis 口令 + 日志轮转）
+├── docker-compose.prod.yml             # 生产编排（无中间件端口 + healthcheck 依赖 + 固定 tag）
+├── start.bat / start.ps1               # 一键启动（.bat 纯 ASCII 转发器）
+├── stop.bat / stop.ps1                 # 一键停止
+└── README.md                           # 项目根说明（快速开始 / 端口 / 变量清单 / 门禁 / 生产部署）
 ```
 
 ---
 
-## 五、项目目录说明
+## 八、质量门禁
 
+```bash
+# 一键：后端测试 + 前端 analyze + 前端 test（任一失败即非 0 退出）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/quality-gate.ps1
+.\start.ps1 -Mode 6     # 同一入口（选项 6 直接调用上面的脚本）
+
+# CI：.github/workflows/ci.yml（push/PR 触发，后端 + 前端两个 job）
 ```
-CampusTrade/
-├── backend/                       # Spring Boot 3 + Java 21 后端模块
-│   ├── src/
-│   │   ├── main/
-│   │   │   ├── java/com/campustrade/
-│   │   │   │   ├── common/        # 统一返回结果 Result、通用常量与工具
-│   │   │   │   ├── config/        # MyBatis-Plus、Redis 等组件配置
-│   │   │   │   ├── controller/    # Web 控制器层（留空，无业务）
-│   │   │   │   ├── dto/           # 数据传输对象（留空）
-│   │   │   │   ├── entity/        # 数据库实体类（留空）
-│   │   │   │   ├── exception/     # 全局异常处理与自定义业务异常
-│   │   │   │   ├── mapper/        # MyBatis-Plus 数据访问接口（留空）
-│   │   │   │   ├── service/       # 业务逻辑接口与实现（留空）
-│   │   │   │   ├── vo/            # 视图呈现对象（留空）
-│   │   │   │   └── CampusTradeApplication.java # Spring Boot 启动类
-│   │   │   └── resources/
-│   │   │       └── application.yml# 应用核心配置文件
-│   │   └── test/                  # 单元与集成测试
-│   └── pom.xml                    # Maven 构建脚本
-├── frontend/                      # Flutter 3 多端前端模块
-│   ├── lib/
-│   │   ├── api/                   # Dio 封装与 API 请求定义
-│   │   ├── config/                # 客户端环境、全局常量配置
-│   │   ├── models/                # 前端数据模型
-│   │   ├── pages/                 # 页面 UI（包含 Stage 0 占位页）
-│   │   ├── routes/                # GetX 页面路由管理
-│   │   ├── services/              # 客户端全局服务（网络、存储等）
-│   │   ├── utils/                 # 工具函数
-│   │   ├── widgets/               # 通用基础 UI 组件
-│   │   └── main.dart              # Flutter 入口
-│   └── pubspec.yaml               # Flutter 依赖配置
-├── docker/                        # 容器化与运维配置
-│   └── postgres/
-│       └── init.sql               # PostgreSQL 数据库初始化脚本
-├── docs/                          # 项目相关设计与接口文档
-│   └── README.md                  # 本说明文档
-├── .env.example                   # 环境变量模板
-├── docker-compose.yml             # 本地中间件一键编排配置
-└── README.md                      # 项目根说明文档
-```
+
+**基线（阶段 8 实测）**：后端 `mvn -B test` 242 项全绿、`flutter analyze` 0 issue、`flutter test` 142 项全绿。
