@@ -14,6 +14,7 @@ import com.campustrade.mapper.TradeOrderMapper;
 import com.campustrade.mapper.UserCreditMapper;
 import com.campustrade.service.OrderService;
 import com.campustrade.service.order.OrderStateMachine;
+import com.campustrade.enums.GoodsStatus;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -100,7 +101,7 @@ class CampusTradeStage4B2Tests {
                 .price(price != null ? price : new BigDecimal("1999.00"))
                 .originalPrice(new BigDecimal("3999.00"))
                 .conditionLevel("9成新")
-                .status(status != null ? status : "ON_SALE")
+                .status(status != null ? status : GoodsStatus.ON_SALE.getCode())
                 .location("学子第一食堂西门")
                 .viewCount(10)
                 .createdTime(LocalDateTime.now())
@@ -135,7 +136,7 @@ class CampusTradeStage4B2Tests {
     @Order(1)
     @DisplayName("1. 买家不能购买自己发布的商品")
     void test01_buyer_cannot_buy_own_goods() {
-        Long goodsId = createTestGoods("ON_SALE", new BigDecimal("500.00"));
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode(), new BigDecimal("500.00"));
 
         CreateOrderDTO dto = CreateOrderDTO.builder()
                 .goodsId(goodsId)
@@ -156,7 +157,7 @@ class CampusTradeStage4B2Tests {
     @DisplayName("2. 商品非 ON_SALE 状态不能下单 (如 LOCKED, SOLD, OFF_SHELF)")
     void test02_non_on_sale_goods_cannot_be_ordered() {
         // 测试 LOCKED
-        Long lockedGoodsId = createTestGoods("LOCKED", new BigDecimal("100.00"));
+        Long lockedGoodsId = createTestGoods(GoodsStatus.LOCKED.getCode(), new BigDecimal("100.00"));
         OrderBusinessException ex1 = assertThrows(OrderBusinessException.class, () -> {
             orderService.createOrder(TEST_BUYER_ID, lockedGoodsId, "食堂", "想买已锁定的商品");
         });
@@ -164,7 +165,7 @@ class CampusTradeStage4B2Tests {
         assertTrue(ex1.getMessage().contains("商品非在售状态"));
 
         // 测试 SOLD
-        Long soldGoodsId = createTestGoods("SOLD", new BigDecimal("100.00"));
+        Long soldGoodsId = createTestGoods(GoodsStatus.SOLD.getCode(), new BigDecimal("100.00"));
         OrderBusinessException ex2 = assertThrows(OrderBusinessException.class, () -> {
             orderService.createOrder(TEST_BUYER_ID, soldGoodsId, "食堂", "想买已售出的商品");
         });
@@ -172,7 +173,7 @@ class CampusTradeStage4B2Tests {
         assertTrue(ex2.getMessage().contains("商品非在售状态"));
 
         // 测试 OFF_SHELF
-        Long offShelfGoodsId = createTestGoods("OFF_SHELF", new BigDecimal("100.00"));
+        Long offShelfGoodsId = createTestGoods(GoodsStatus.OFF_SHELF.getCode(), new BigDecimal("100.00"));
         OrderBusinessException ex3 = assertThrows(OrderBusinessException.class, () -> {
             orderService.createOrder(TEST_BUYER_ID, offShelfGoodsId, "食堂", "想买已下架的商品");
         });
@@ -185,7 +186,7 @@ class CampusTradeStage4B2Tests {
     @DisplayName("3. 创建订单成功：goods 变 LOCKED，order 为 WAIT_SELLER_CONFIRM，快照字段正确")
     void test03_create_order_success_and_snapshots_verified() {
         BigDecimal price = new BigDecimal("888.88");
-        Long goodsId = createTestGoods("ON_SALE", price);
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode(), price);
         Goods originalGoods = goodsMapper.selectById(goodsId);
 
         CreateOrderDTO dto = CreateOrderDTO.builder()
@@ -211,14 +212,14 @@ class CampusTradeStage4B2Tests {
 
         // 验证数据库中 goods 状态同步变为 LOCKED
         Goods updatedGoods = goodsMapper.selectById(goodsId);
-        assertEquals("LOCKED", updatedGoods.getStatus(), "商品状态必须同步变更为 LOCKED");
+        assertEquals(GoodsStatus.LOCKED.getCode(), updatedGoods.getStatus(), "商品状态必须同步变更为 LOCKED");
     }
 
     @Test
     @Order(4)
     @DisplayName("4. 非卖家不能 confirmOrder")
     void test04_non_seller_cannot_confirm_order() {
-        Long goodsId = createTestGoods("ON_SALE", new BigDecimal("200.00"));
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode(), new BigDecimal("200.00"));
         TradeOrder order = orderService.createOrder(TEST_BUYER_ID, goodsId, "东门", "留言");
 
         // 1. 买家尝试 confirm
@@ -240,7 +241,7 @@ class CampusTradeStage4B2Tests {
     @Order(5)
     @DisplayName("5. confirmOrder 成功：order 变 WAIT_MEET，confirmedTime 写入")
     void test05_confirm_order_success() {
-        Long goodsId = createTestGoods("ON_SALE", new BigDecimal("350.00"));
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode(), new BigDecimal("350.00"));
         TradeOrder order = orderService.createOrder(TEST_BUYER_ID, goodsId, "操场", "准时到");
 
         TradeOrder confirmedOrder = orderService.confirmOrder(order.getId(), TEST_SELLER_ID);
@@ -259,7 +260,7 @@ class CampusTradeStage4B2Tests {
     @Order(6)
     @DisplayName("6. 非买家且非卖家不能 cancelOrder")
     void test06_third_party_cannot_cancel_order() {
-        Long goodsId = createTestGoods("ON_SALE", new BigDecimal("150.00"));
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode(), new BigDecimal("150.00"));
         TradeOrder order = orderService.createOrder(TEST_BUYER_ID, goodsId, "教学楼", "留言");
 
         OrderBusinessException ex = assertThrows(OrderBusinessException.class, () -> {
@@ -274,12 +275,12 @@ class CampusTradeStage4B2Tests {
     @Order(7)
     @DisplayName("7. cancelOrder 成功：order 变 CANCELLED，goods 恢复 ON_SALE")
     void test07_cancel_order_success_and_goods_status_restored() {
-        Long goodsId = createTestGoods("ON_SALE", new BigDecimal("600.00"));
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode(), new BigDecimal("600.00"));
         TradeOrder order = orderService.createOrder(TEST_BUYER_ID, goodsId, "宿舍楼下", "留言");
 
         // 确认 goods 当前是 LOCKED
         Goods lockedGoods = goodsMapper.selectById(goodsId);
-        assertEquals("LOCKED", lockedGoods.getStatus());
+        assertEquals(GoodsStatus.LOCKED.getCode(), lockedGoods.getStatus());
 
         // 买家取消订单
         String reason = "临时有事，不方便面交了";
@@ -293,14 +294,14 @@ class CampusTradeStage4B2Tests {
 
         // 验证商品状态恢复为 ON_SALE
         Goods restoredGoods = goodsMapper.selectById(goodsId);
-        assertEquals("ON_SALE", restoredGoods.getStatus(), "取消后商品状态必须恢复为 ON_SALE");
+        assertEquals(GoodsStatus.ON_SALE.getCode(), restoredGoods.getStatus(), "取消后商品状态必须恢复为 ON_SALE");
     }
 
     @Test
     @Order(8)
     @DisplayName("8. completeOrder 成功：order 变 COMPLETED，goods 变 SOLD，双方 trade_count + 1")
     void test08_complete_order_success_and_trade_count_incremented() {
-        Long goodsId = createTestGoods("ON_SALE", new BigDecimal("1200.00"));
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode(), new BigDecimal("1200.00"));
         TradeOrder order = orderService.createOrder(TEST_BUYER_ID, goodsId, "体育馆", "面交完成测试");
 
         // 卖家先确认接单: WAIT_SELLER_CONFIRM -> WAIT_MEET
@@ -326,7 +327,7 @@ class CampusTradeStage4B2Tests {
 
         // 验证商品状态更新为 SOLD
         Goods soldGoods = goodsMapper.selectById(goodsId);
-        assertEquals("SOLD", soldGoods.getStatus(), "完成后商品状态必须更新为 SOLD");
+        assertEquals(GoodsStatus.SOLD.getCode(), soldGoods.getStatus(), "完成后商品状态必须更新为 SOLD");
 
         // 验证买家与卖家信用档案中的 trade_count 均 + 1
         UserCredit buyerCreditAfter = userCreditMapper.selectOne(
@@ -346,7 +347,7 @@ class CampusTradeStage4B2Tests {
     @Order(9)
     @DisplayName("9. 非法状态转换拦截（如直接从 WAIT_SELLER_CONFIRM 到 COMPLETED）")
     void test09_invalid_state_transition_prevented() {
-        Long goodsId = createTestGoods("ON_SALE", new BigDecimal("300.00"));
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode(), new BigDecimal("300.00"));
         TradeOrder order = orderService.createOrder(TEST_BUYER_ID, goodsId, "二餐", "留言");
 
         // 此时订单处于 WAIT_SELLER_CONFIRM，尚未经卖家确认，直接尝试 completeOrder
@@ -396,7 +397,7 @@ class CampusTradeStage4B2Tests {
     @Order(11)
     @DisplayName("11. 取消订单时取消原因不能为空")
     void test11_cancel_order_reason_not_empty() {
-        Long goodsId = createTestGoods("ON_SALE", new BigDecimal("100.00"));
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode(), new BigDecimal("100.00"));
         TradeOrder order = orderService.createOrder(TEST_BUYER_ID, goodsId, "宿舍", "留言");
 
         // null 原因

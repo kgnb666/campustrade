@@ -20,6 +20,7 @@ import com.campustrade.service.ReportService;
 import com.campustrade.vo.report.AdminAuditLogVO;
 import com.campustrade.vo.report.AdminReportDetailVO;
 import com.campustrade.vo.report.ReportVO;
+import com.campustrade.enums.GoodsStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.flywaydb.core.Flyway;
@@ -205,7 +206,7 @@ class CampusTradeStage6BTests {
 
     private Long ensureReviewFixtureGoods() {
         if (reviewFixtureGoodsId == null) {
-            reviewFixtureGoodsId = createTestGoods(SELLER_USER_ID, "评价外键夹具商品", "ON_SALE").getId();
+            reviewFixtureGoodsId = createTestGoods(SELLER_USER_ID, "评价外键夹具商品", GoodsStatus.ON_SALE.getCode()).getId();
         }
         return reviewFixtureGoodsId;
     }
@@ -372,7 +373,7 @@ class CampusTradeStage6BTests {
     @DisplayName("测试6: 严禁自举报防范 (卖家举报自己商品 / 评价者举报自己评价 / 用户举报自己)")
     void test06_self_report_defense() throws Exception {
         // 1. 卖家举报自己的商品
-        Goods ownGoods = createTestGoods(REPORTER_USER_ID, "自己发布的测试商品", "ON_SALE");
+        Goods ownGoods = createTestGoods(REPORTER_USER_ID, "自己发布的测试商品", GoodsStatus.ON_SALE.getCode());
         CreateReportRequest goodsReq = CreateReportRequest.builder()
                 .targetType("GOODS")
                 .targetId(ownGoods.getId())
@@ -427,7 +428,7 @@ class CampusTradeStage6BTests {
     @Order(7)
     @DisplayName("测试7: 正常提交举报工单，初始状态为 PENDING")
     void test07_submit_report_success() throws Exception {
-        Goods goods = createTestGoods(SELLER_USER_ID, "违规山寨iPhone", "ON_SALE");
+        Goods goods = createTestGoods(SELLER_USER_ID, "违规山寨iPhone", GoodsStatus.ON_SALE.getCode());
 
         CreateReportRequest req = CreateReportRequest.builder()
                 .targetType("GOODS")
@@ -445,7 +446,7 @@ class CampusTradeStage6BTests {
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.targetType").value("GOODS"))
                 .andExpect(jsonPath("$.data.targetId").value(goods.getId()))
-                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.status").value(ReportStatus.PENDING.getCode()))
                 .andExpect(jsonPath("$.data.reasonDesc").value("假冒劣质"))
                 .andReturn();
 
@@ -465,7 +466,7 @@ class CampusTradeStage6BTests {
     @Order(8)
     @DisplayName("测试8: 同一用户对同一目标未结工单重复举报触发 409 Conflict 拦截")
     void test08_duplicate_pending_report_conflict() throws Exception {
-        Goods goods = createTestGoods(SELLER_USER_ID, "重复举报测试商品", "ON_SALE");
+        Goods goods = createTestGoods(SELLER_USER_ID, "重复举报测试商品", GoodsStatus.ON_SALE.getCode());
 
         CreateReportRequest req = CreateReportRequest.builder()
                 .targetType("GOODS")
@@ -508,7 +509,7 @@ class CampusTradeStage6BTests {
         // 模拟今日已经举报了 10 次
         stringRedisTemplate.opsForValue().set(redisKey, "10");
 
-        Goods goods = createTestGoods(SELLER_USER_ID, "限流测试商品", "ON_SALE");
+        Goods goods = createTestGoods(SELLER_USER_ID, "限流测试商品", GoodsStatus.ON_SALE.getCode());
         CreateReportRequest req = CreateReportRequest.builder()
                 .targetType("GOODS")
                 .targetId(goods.getId())
@@ -535,7 +536,7 @@ class CampusTradeStage6BTests {
     @Order(10)
     @DisplayName("测试10: 管理员驳回无效举报工单 (INVALID) 并记录审计流水")
     void test10_admin_reject_invalid_report() throws Exception {
-        Goods goods = createTestGoods(SELLER_USER_ID, "被误报的正常书籍", "ON_SALE");
+        Goods goods = createTestGoods(SELLER_USER_ID, "被误报的正常书籍", GoodsStatus.ON_SALE.getCode());
 
         CreateReportRequest createReq = CreateReportRequest.builder()
                 .targetType("GOODS")
@@ -559,13 +560,13 @@ class CampusTradeStage6BTests {
                         .content(objectMapper.writeValueAsString(handleReq)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.status").value("HANDLED_INVALID"))
+                .andExpect(jsonPath("$.data.status").value(ReportStatus.HANDLED_INVALID.getCode()))
                 .andExpect(jsonPath("$.data.handleResult").value("核查价格符合校园市场二手标准，举报不属实，予以驳回"))
                 .andExpect(jsonPath("$.data.handledBy").value(ADMIN_USER_ID));
 
         // 商品状态仍保持 ON_SALE
         Goods checkGoods = goodsMapper.selectById(goods.getId());
-        assertEquals("ON_SALE", checkGoods.getStatus());
+        assertEquals(GoodsStatus.ON_SALE.getCode(), checkGoods.getStatus());
 
         // 验证审计日志
         Long auditCount = adminAuditLogMapper.selectCount(
@@ -581,7 +582,7 @@ class CampusTradeStage6BTests {
     @Order(11)
     @DisplayName("测试11: 管理员采纳违规商品举报 (VALID)，商品强制下架 (OFF_SHELF) 并记录审计流水")
     void test11_admin_accept_goods_report_and_off_shelf() throws Exception {
-        Goods illegalGoods = createTestGoods(SELLER_USER_ID, "违禁实验药品", "ON_SALE");
+        Goods illegalGoods = createTestGoods(SELLER_USER_ID, "违禁实验药品", GoodsStatus.ON_SALE.getCode());
 
         CreateReportRequest createReq = CreateReportRequest.builder()
                 .targetType("GOODS")
@@ -605,11 +606,11 @@ class CampusTradeStage6BTests {
                         .content(objectMapper.writeValueAsString(handleReq)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.status").value("HANDLED_VALID"));
+                .andExpect(jsonPath("$.data.status").value(ReportStatus.HANDLED_VALID.getCode()));
 
         // 验证商品已被下架
         Goods updatedGoods = goodsMapper.selectById(illegalGoods.getId());
-        assertEquals("OFF_SHELF", updatedGoods.getStatus(), "违规商品必须被设置为 OFF_SHELF 状态");
+        assertEquals(GoodsStatus.OFF_SHELF.getCode(), updatedGoods.getStatus(), "违规商品必须被设置为 OFF_SHELF 状态");
 
         // 验证针对商品的审计流水
         AdminAuditLog goodsLog = adminAuditLogMapper.selectOne(
@@ -618,8 +619,8 @@ class CampusTradeStage6BTests {
                         .eq(AdminAuditLog::getTargetId, illegalGoods.getId())
         );
         assertNotNull(goodsLog, "必须生成商品强制下架的审计记录");
-        assertEquals("ON_SALE", goodsLog.getBeforeStatus());
-        assertEquals("OFF_SHELF", goodsLog.getAfterStatus());
+        assertEquals(GoodsStatus.ON_SALE.getCode(), goodsLog.getBeforeStatus());
+        assertEquals(GoodsStatus.OFF_SHELF.getCode(), goodsLog.getAfterStatus());
     }
 
     // =========================================================================
@@ -736,7 +737,7 @@ class CampusTradeStage6BTests {
     @Order(14)
     @DisplayName("测试14: 工单状态机闭环防重，已处理工单不可再次重复处理 (400)")
     void test14_cannot_handle_already_processed_report() throws Exception {
-        Goods goods = createTestGoods(SELLER_USER_ID, "状态机测试商品", "ON_SALE");
+        Goods goods = createTestGoods(SELLER_USER_ID, "状态机测试商品", GoodsStatus.ON_SALE.getCode());
         CreateReportRequest createReq = CreateReportRequest.builder()
                 .targetType("GOODS")
                 .targetId(goods.getId())

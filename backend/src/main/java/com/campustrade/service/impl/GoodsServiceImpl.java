@@ -1,6 +1,7 @@
 package com.campustrade.service.impl;
 
 import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
@@ -80,7 +81,7 @@ public class GoodsServiceImpl implements GoodsService {
         StudentVerify studentVerify = studentVerifyMapper.selectOne(
                 new LambdaQueryWrapper<StudentVerify>()
                         .eq(StudentVerify::getUserId, userId)
-                        .eq(StudentVerify::getVerifyStatus, "SUCCESS")
+                        .eq(StudentVerify::getVerifyStatus, StudentVerifyStatus.SUCCESS.getCode())
                         .last("LIMIT 1")
         );
         if (studentVerify == null) {
@@ -314,7 +315,7 @@ public class GoodsServiceImpl implements GoodsService {
         StudentVerify sellerVerify = studentVerifyMapper.selectOne(
                 new LambdaQueryWrapper<StudentVerify>()
                         .eq(StudentVerify::getUserId, goods.getSellerId())
-                        .eq(StudentVerify::getVerifyStatus, "SUCCESS")
+                        .eq(StudentVerify::getVerifyStatus, StudentVerifyStatus.SUCCESS.getCode())
                         .last("LIMIT 1")
         );
         boolean isVerified = sellerVerify != null;

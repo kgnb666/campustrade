@@ -16,6 +16,8 @@ import com.campustrade.service.FavoriteService;
 import com.campustrade.service.GoodsService;
 import com.campustrade.service.ai.DeepSeekClient;
 import com.campustrade.support.TestCredentials;
+import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
@@ -123,7 +125,7 @@ class CampusTradeStage35CTests {
                 .schoolId(1L)
                 .studentNumber("STU_35C_A_" + runId)
                 .schoolEmail(userA.getEmail())
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(LocalDateTime.now())
                 .createdTime(LocalDateTime.now())
                 .build());
@@ -160,7 +162,7 @@ class CampusTradeStage35CTests {
                 .schoolId(2L)
                 .studentNumber("STU_35C_B_" + runId)
                 .schoolEmail(userB.getEmail())
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(LocalDateTime.now())
                 .createdTime(LocalDateTime.now())
                 .build());
@@ -187,7 +189,7 @@ class CampusTradeStage35CTests {
                 .price(new BigDecimal("99.00"))
                 .originalPrice(new BigDecimal("199.00"))
                 .conditionLevel("95新")
-                .status("ON_SALE")
+                .status(GoodsStatus.ON_SALE.getCode())
                 .location("紫荆宿舍区")
                 .viewCount(0)
                 .createdTime(LocalDateTime.now())
@@ -205,7 +207,7 @@ class CampusTradeStage35CTests {
                 .description("已下架不应允许收藏")
                 .price(new BigDecimal("50.00"))
                 .conditionLevel("9成新")
-                .status("OFF_SHELF")
+                .status(GoodsStatus.OFF_SHELF.getCode())
                 .viewCount(0)
                 .createdTime(LocalDateTime.now())
                 .updatedTime(LocalDateTime.now())
@@ -643,7 +645,7 @@ class CampusTradeStage35CTests {
                 .title("并发专用测试商品")
                 .price(new BigDecimal("123.00"))
                 .conditionLevel("全新")
-                .status("ON_SALE")
+                .status(GoodsStatus.ON_SALE.getCode())
                 .createdTime(LocalDateTime.now())
                 .build();
         goodsMapper.insert(concurrentGoods);

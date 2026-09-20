@@ -22,6 +22,8 @@ import com.campustrade.service.SearchHistoryService;
 import com.campustrade.service.ai.DeepSeekClient;
 import com.campustrade.support.TestCredentials;
 import com.campustrade.vo.GoodsDetailVO;
+import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -135,7 +137,7 @@ class CampusTradeStage35ETests {
                 .schoolId(1L)
                 .studentNumber("STU_35E_" + runId)
                 .schoolEmail(user.getEmail())
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(LocalDateTime.now())
                 .createdTime(LocalDateTime.now())
                 .build());
@@ -162,7 +164,7 @@ class CampusTradeStage35ETests {
                 .price(new BigDecimal("99.00"))
                 .originalPrice(new BigDecimal("199.00"))
                 .conditionLevel("95新")
-                .status("ON_SALE")
+                .status(GoodsStatus.ON_SALE.getCode())
                 .location("测试宿舍楼")
                 .viewCount(50)
                 .createdTime(LocalDateTime.now())

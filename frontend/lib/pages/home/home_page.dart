@@ -7,7 +7,11 @@ import '../../utils/name_utils.dart';
 import '../../widgets/status_badge.dart';
 import '../../models/status_enums.dart';
 
-/// CampusTrade 首页 (Stage 1: 用户中心与校园认证就绪)
+/// CampusTrade 首页（登录引导 + 校园认证与商品中心能力概览）
+///
+/// 卡片标题只描述**能力**，不再写"Stage N"这类阶段号：阶段号属于开发过程信息，
+/// 会随批次过期（此前页面上仍写着 Stage 1 / Stage 2，而项目已到 Stage 8），
+/// 用户看到的应当是"有什么能力"而不是"开发到第几步"。
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
 
@@ -162,7 +166,7 @@ class HomePage extends StatelessWidget {
                 }),
                 const SizedBox(height: 20),
 
-                // Stage 1 阶段卡片
+                // 用户中心与校园认证能力卡片
                 Card(
                   elevation: 2,
                   shape: RoundedRectangleBorder(
@@ -178,7 +182,7 @@ class HomePage extends StatelessWidget {
                             const Icon(Icons.verified_user_outlined, color: Colors.indigo),
                             const SizedBox(width: 8),
                             Text(
-                              'Stage 1：用户中心与校园认证就绪',
+                              '用户中心与校园认证就绪',
                               style: theme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.bold,
                               ),
@@ -252,7 +256,7 @@ class HomePage extends StatelessWidget {
                 ),
                 const SizedBox(height: 20),
 
-                // Stage 2 阶段卡片 (商品中心)
+                // 商品中心能力卡片
                 Card(
                   elevation: 2,
                   shape: RoundedRectangleBorder(
@@ -268,7 +272,7 @@ class HomePage extends StatelessWidget {
                             const Icon(Icons.shopping_bag_outlined, color: Colors.deepOrange),
                             const SizedBox(width: 8),
                             Text(
-                              'Stage 2：商品发布与浏览体系就绪',
+                              '商品发布与浏览体系就绪',
                               style: theme.textTheme.titleMedium?.copyWith(
                                 fontWeight: FontWeight.bold,
                               ),

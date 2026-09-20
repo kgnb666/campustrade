@@ -136,6 +136,11 @@ public class JwtTokenProvider {
 
     /**
      * 校验 Token 是否合法且未过期
+     *
+     * <p>语义等价于"{@link #getClaims(String)} 不抛异常"。请求链路上的
+     * {@link JwtAuthenticationFilter} 需要在一次请求内同时拿到类型、用户名与 userId，
+     * 因此它直接调用 {@link #getClaims(String)} 并自行处理异常（只验签一次），
+     * 不再调用本方法；本方法保留给"只想知道真/假"的调用方与测试使用。</p>
      */
     public boolean validateToken(String token) {
         try {

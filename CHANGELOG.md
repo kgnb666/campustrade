@@ -9,7 +9,75 @@
 
 ---
 
-## 2026-09-21 — 工程化与文档收尾（本批次，工作区未提交）
+## 2026-09-21 — 代码整洁、测试收敛与小加固（本批次，工作区未提交）
+
+**范围**：JWT 校验比对 userId、认证测试用例自治、商品详情查询数评估、HTML 转义策略落地与守护测试、
+前端 `_serverMessage` / pageSize / 版本号收敛、后端测试裸状态字面量枚举化。
+
+**变更**
+
+- **JWT 校验同时比对令牌内 userId（安全小加固）**：`JwtAuthenticationFilter` 此前只按令牌 `sub`（用户名）
+  查库，不比对令牌里的 `userId`——当前没有账号删除路径所以不可利用，但一旦将来加入"注销/彻底删除"，
+  旧令牌会在同名账号被重建后认证成**另一个用户**。现在比对不一致即 401
+  （日志给出双方 id 与令牌指纹，不打印令牌原文），并在同一次请求里只解析一次令牌载荷
+  （原先 `validateToken` + `getTokenType` + `getUsername` 各解析一次，即 3 次 HMAC 验签 → 1 次）。
+- **`AuthSecurityEnhanceTest` 用例自治**：移除 `@TestMethodOrder(OrderAnnotation.class)` 与
+  `accessToken` / `refreshToken` / `userId` 静态字段，改为每个用例在 `@BeforeEach` 里自带前置
+  （随机账号 → 注册 → 登录）。此前"单独运行某个用例"必然失败（前置用例没跑、静态字段为 null），
+  且 5 号用例（删除 Refresh 白名单）一旦先于 4 号执行就会让 4 号假失败。每个用例另分配独立来源 IP，
+  避免注册接口"单 IP 每小时 20 次"的限频被同一测试 JVM 内多个测试类的注册次数累加撞成 429。
+  新增 1 项用例：令牌 userId 与库中用户不一致 → 401（并对照同次前置签发的合法令牌仍为 200）。
+- **`StudentVerifyStatus` 枚举补齐**：`student_verify.verify_status` 此前没有枚举，取值在实体默认值、
+  服务层两个常量与查询条件里各写一遍字面量（而"SUCCESS 只能由验证码核销成功写入"是一条安全边界）。
+  新增 `com.campustrade.enums.StudentVerifyStatus`（PENDING / SUCCESS，与 V10 的
+  `chk_student_verify_status_domain` 及 V12 的部分唯一索引同域；刻意不含 DB 不允许的 FAILED），
+  生产侧（实体默认值、`StudentVerifyServiceImpl`、`GoodsServiceImpl`、`Report`）全部改为引用枚举。
+- **测试裸状态字面量收敛**：18 个后端测试类里 122 处领域状态字面量 → 2 处（**收敛 120 处**）。
+  唯一保留的两处是 `CampusTradeStage7DTests` 里"枚举取值域 vs V10 CHECK 约束"的契约断言：
+  那里的字面量是被比对的**外部真相**（数据库取值域），改成枚举自比会变成恒真、反而失去护栏作用。
+  另把 `CampusTradeDataIntegrityTests` 里 5 处测试内部的 `"SUCCESS"` 完成标记提为具名常量
+  `OUTCOME_SUCCESS`（明确它不是领域状态，因此不引用枚举）。
+- **商品详情串行查询（评估结论：保持现状）**：用 MyBatis 拦截器（`SqlStatementCounter`）实测
+  `getGoodsDetail` 单请求 SQL 条数：**匿名访客 8 条、已登录访客 11 条**（多出的 3 条是浏览足迹写入路径
+  的 1 查 1 写与"是否已收藏"的 1 查；收藏数走 Redis 缓存命中，未落库）。8 条全部是主键或带索引的单行查询，
+  50 次调用平均 ~10.5ms/次（含 Redis INCR 与足迹写入）。合并候选（卖家 user + user_credit + student_verify、
+  图片 + 标签）每项只能省 1 条语句，却各需要一条手写 join/union SQL 与手工映射，并要求在不改变语义的前提下
+  复现 `LIMIT 1`、null 兜底与索引使用；并行化则会在非事务方法里为单个请求同时占用多连接
+  （Hikari 开发 10 / 生产 20），引入新的连接池压力失败模式。收益（数毫秒）小于风险，**不改**。
+- **`HtmlEscapeUtils` 使用策略落地**：类文档与 README 新增「安全约定：用户内容的存储与转义」章节，
+  写明"唯一展示端是 Flutter 纯文本渲染、后端无 HTML 模板，因此按原文存取；新增 HTML 展示端必须在输出点
+  调用 `escape()`"。新增守护测试 `BackendHtmlSurfaceGuardTests`：扫描 `src/main/resources`，
+  一旦出现 `templates/` 或 `.html/.ftl/.vm/.mustache/.jsp` 等模板类文件即失败（已实测：放入
+  `templates/*.html` 与 `static/**/*.html` 都会失败，移除后通过）。
+- **前端 `_serverMessage` 统一**：`GoodsService` / `FavoriteService` / `HistoryService` 三份重复的
+  "取服务端 message"实现删除，统一为 `api_error.dart` 的 `serverMessageOf` / `serverMessageOr`
+  （`describeApiError` 也复用同一份解析）。新增 `test/final_api_error_test.dart` 钉住
+  "服务端 message 优先 / 缺省回退本中文案 / 状态码保留"。
+- **前端分页 size 默认值收敛到 `AppConfig`**：`goods_service`（2 处）、`favorite_service`、
+  `history_service`、`order_api`、`review_api`（2 处）里写死的 `int size = 10/20` 改为引用
+  `AppConfig.*PageSize`，接口默认值与调用侧不再各写一份。
+- **`AppConfig.appVersion` 与 pubspec 同步**：`1.0.0 (Stage 0)` → `1.0.0+1`（与 `pubspec.yaml` 一致），
+  并删掉首页两处用户可见的阶段号文案（"Stage 1：…" / "Stage 2：…"，项目已到阶段 8，页面还停在阶段 1/2）。
+  新增 `test/final_config_sync_test.dart`：①`AppConfig.appVersion` 必须等于 pubspec 的 `version`；
+  ②`lib/` 下不得出现含 `Stage <数字>` 的字符串字面量（注释里的历史阶段名不受影响）。
+  刻意不引入 `package_info_plus`：为一个展示用版本号拉入平台插件不划算，改用测试保证同步。
+
+**验证**
+
+- 后端 `mvn -B test`：**257 项全绿**（基线 255 + 新增 2：`AuthSecurityEnhanceTest` 的 userId 比对用例、
+  `BackendHtmlSurfaceGuardTests`）。
+- `AuthSecurityEnhanceTest` 逐个用例单独运行验证：`#test04_refreshTokenSuccess`、
+  `#test05_refreshFailsWhenNotInRedisWhitelist`、`#test06_tokenUserIdMismatchIsRejected` 均
+  `Tests run: 1, Failures: 0, Errors: 0`。
+- JWT userId 不匹配实测：`token.userId=2101724373833118274` vs `db.userId=2101724373832118274` →
+  `HTTP 401 body={"code":401,"message":"未登录或登录已失效，请重新登录",...}`，同时日志输出
+  `令牌内 userId 与数据库用户不一致，拒绝认证: username=..., tokenUserId=..., dbUserId=..., tokenFp=10e377bd`；
+  同次前置签发的合法令牌仍为 200。
+- 前端 `flutter analyze` **0 issue**、`flutter test` **187 项全绿**（基线 176 + 新增 11）。
+
+---
+
+## 2026-09-21 — 工程化与文档收尾（批次 3，工作区未提交）
 
 **范围**：质量门禁前置检查、CI 与本地门禁一致性、镜像可复现性、CHANGELOG / CONTRIBUTING、阶段 7/8 报告与运维章节。
 
@@ -325,7 +393,8 @@ V12 在 Testcontainers 全新库与开发库均 `success`（Flyway 已登记 `ve
 | 终审修复 | `45ce200` | 242 | 142 |
 | 批次 1 | `afa595d` | 255 | 142 |
 | 批次 2 | `d740cb7` | 255 | 176 |
-| 工程化与文档收尾 | 本批次 | 255 | 176 |
+| 批次 3（工程化与文档收尾） | `5544d5f` | 255 | 176 |
+| 代码整洁、测试收敛与小加固 | 本批次 | 257 | 187 |
 
 > 表格中的 `—` 表示该阶段提交未单独给出该侧计数（不代表测试未运行）。
-> 每一行都要求 `flutter analyze` = 0 issue；当前基线为**后端 255 项、前端 176 项全绿**。
+> 每一行都要求 `flutter analyze` = 0 issue；当前基线为**后端 257 项、前端 187 项全绿**。

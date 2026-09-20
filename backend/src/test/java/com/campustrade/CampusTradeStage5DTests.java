@@ -14,6 +14,7 @@ import com.campustrade.service.CreditService;
 import com.campustrade.service.ReviewService;
 import com.campustrade.vo.review.OrderReviewStatusVO;
 import com.campustrade.vo.review.ReviewVO;
+import com.campustrade.enums.GoodsStatus;
 import org.flywaydb.core.Flyway;
 import org.flywaydb.core.api.MigrationInfo;
 import org.flywaydb.core.api.MigrationState;
@@ -124,7 +125,7 @@ class CampusTradeStage5DTests {
                     .description("测试商品描述")
                     .price(new BigDecimal("199.00"))
                     .conditionLevel("95新")
-                    .status("SOLD")
+                    .status(GoodsStatus.SOLD.getCode())
                     .viewCount(0)
                     .createdTime(LocalDateTime.now())
                     .updatedTime(LocalDateTime.now())
@@ -566,7 +567,7 @@ class CampusTradeStage5DTests {
         Long testGId = Math.abs(UUID.randomUUID().getMostSignificantBits());
         initTestGoods(testGId, testSeller, "待面交测试商品");
         Goods g = goodsMapper.selectById(testGId);
-        g.setStatus("ON_SALE");
+        g.setStatus(GoodsStatus.ON_SALE.getCode());
         goodsMapper.updateById(g);
 
         TradeOrder order = orderService.createOrder(testBuyer, testGId, "操场", "留言");
@@ -610,7 +611,7 @@ class CampusTradeStage5DTests {
         Long gIdA = Math.abs(UUID.randomUUID().getMostSignificantBits());
         initTestGoods(gIdA, testSeller, "确认前取消商品");
         Goods gA = goodsMapper.selectById(gIdA);
-        gA.setStatus("ON_SALE");
+        gA.setStatus(GoodsStatus.ON_SALE.getCode());
         goodsMapper.updateById(gA);
 
         TradeOrder orderA = orderService.createOrder(testBuyer, gIdA, "二餐", "买");
@@ -624,7 +625,7 @@ class CampusTradeStage5DTests {
         Long gIdB = Math.abs(UUID.randomUUID().getMostSignificantBits());
         initTestGoods(gIdB, testSeller, "待面交取消商品");
         Goods gB = goodsMapper.selectById(gIdB);
-        gB.setStatus("ON_SALE");
+        gB.setStatus(GoodsStatus.ON_SALE.getCode());
         goodsMapper.updateById(gB);
 
         TradeOrder orderB = orderService.createOrder(testBuyer, gIdB, "图书馆", "买");

@@ -19,6 +19,8 @@ import com.campustrade.service.GoodsService;
 import com.campustrade.support.SqlStatementCounter;
 import com.campustrade.vo.GoodsListVO;
 import com.campustrade.vo.report.AdminReportDetailVO;
+import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.ReportStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.ibatis.session.SqlSessionFactory;
@@ -309,7 +311,7 @@ class CampusTradeStage7PerfTests {
                 .description("阶段 7 性能用例夹具")
                 .price(new BigDecimal("9.90"))
                 .conditionLevel("95新")
-                .status("ON_SALE")
+                .status(GoodsStatus.ON_SALE.getCode())
                 .viewCount(0)
                 .createdTime(LocalDateTime.now())
                 .updatedTime(LocalDateTime.now())
@@ -385,7 +387,7 @@ class CampusTradeStage7PerfTests {
                     .targetId(targetId)
                     .reasonType("FRAUD")
                     .description("阶段7 N+1 夹具 GOODS #" + i)
-                    .status("PENDING")
+                    .status(ReportStatus.PENDING.getCode())
                     .createdTime(LocalDateTime.now())
                     .updatedTime(LocalDateTime.now())
                     .build());
@@ -400,7 +402,7 @@ class CampusTradeStage7PerfTests {
                         .targetId(900000000L + i)
                         .reasonType("HARASSMENT")
                         .description("阶段7 N+1 夹具 " + targetType + " #" + i)
-                        .status("HANDLED_VALID")
+                        .status(ReportStatus.HANDLED_VALID.getCode())
                         .handledBy(ADMIN_ID)
                         .handledTime(LocalDateTime.now())
                         .handleResult("夹具已处置")

@@ -14,6 +14,8 @@ import com.campustrade.mapper.GoodsMapper;
 import com.campustrade.mapper.StudentVerifyMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.support.TestCredentials;
+import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
@@ -107,7 +109,7 @@ class CampusTradeStage2Tests {
                 .schoolId(1L)
                 .studentNumber("20261001")
                 .schoolEmail(userA.getEmail())
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(LocalDateTime.now())
                 .createdTime(LocalDateTime.now())
                 .build());
@@ -145,7 +147,7 @@ class CampusTradeStage2Tests {
                 .schoolId(2L)
                 .studentNumber("20262002")
                 .schoolEmail(userB.getEmail())
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(LocalDateTime.now())
                 .createdTime(LocalDateTime.now())
                 .build());
@@ -230,7 +232,7 @@ class CampusTradeStage2Tests {
         // 检查数据库记录
         Goods goods = goodsMapper.selectById(createdGoodsId);
         assertNotNull(goods);
-        assertEquals("ON_SALE", goods.getStatus());
+        assertEquals(GoodsStatus.ON_SALE.getCode(), goods.getStatus());
         assertEquals(0, new BigDecimal("2899.00").compareTo(goods.getPrice()));
 
         // 检查多图保存
@@ -454,7 +456,7 @@ class CampusTradeStage2Tests {
 
         // 验证数据库状态为 OFF_SHELF
         Goods goods = goodsMapper.selectById(createdGoodsId);
-        assertEquals("OFF_SHELF", goods.getStatus(), "删除后商品状态应流转为 OFF_SHELF");
+        assertEquals(GoodsStatus.OFF_SHELF.getCode(), goods.getStatus(), "删除后商品状态应流转为 OFF_SHELF");
 
         // 验证公开商品列表无法检索到已下架商品
         MvcResult result = mockMvc.perform(get("/goods/list")

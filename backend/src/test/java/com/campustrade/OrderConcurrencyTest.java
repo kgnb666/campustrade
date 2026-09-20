@@ -12,6 +12,7 @@ import com.campustrade.mapper.*;
 import com.campustrade.service.CreditService;
 import com.campustrade.service.GoodsService;
 import com.campustrade.service.OrderService;
+import com.campustrade.enums.GoodsStatus;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -131,7 +132,7 @@ public class OrderConcurrencyTest {
                 .price(new BigDecimal("99.00"))
                 .originalPrice(new BigDecimal("199.00"))
                 .conditionLevel("9成新")
-                .status(status != null ? status : "ON_SALE")
+                .status(status != null ? status : GoodsStatus.ON_SALE.getCode())
                 .location("图书馆一楼")
                 .viewCount(0)
                 .createdTime(LocalDateTime.now())
@@ -155,7 +156,7 @@ public class OrderConcurrencyTest {
     @DisplayName("1. 并发订单状态跃迁排他行锁验证: 买家取消 vs 卖家完成 互斥串行化")
     void test01_concurrentCompleteAndCancelOrder_serialized() throws Exception {
         // 创建订单并推至 WAIT_MEET 状态
-        Long goodsId = createTestGoods("ON_SALE");
+        Long goodsId = createTestGoods(GoodsStatus.ON_SALE.getCode());
         TradeOrder order = orderService.createOrder(BUYER_ID, goodsId, "二餐门口", "请尽快接单");
         order = orderService.confirmOrder(order.getId(), SELLER_ID);
         assertEquals(OrderStatus.WAIT_MEET, order.getOrderStatus());
@@ -321,7 +322,7 @@ public class OrderConcurrencyTest {
         );
 
         // 1. 测试 LOCKED 商品
-        Long lockedGoodsId = createTestGoods("LOCKED");
+        Long lockedGoodsId = createTestGoods(GoodsStatus.LOCKED.getCode());
 
         UpdateGoodsDTO updateDTO = UpdateGoodsDTO.builder()
                 .title("恶意篡改标题")
@@ -344,13 +345,13 @@ public class OrderConcurrencyTest {
 
         // 尝试下架 LOCKED 商品
         BusinessException ex3 = assertThrows(BusinessException.class, () -> {
-            goodsService.updateGoodsStatus(lockedGoodsId, "OFF_SHELF");
+            goodsService.updateGoodsStatus(lockedGoodsId, GoodsStatus.OFF_SHELF.getCode());
         });
         assertEquals(400, ex3.getCode());
         assertTrue(ex3.getMessage().contains("商品处于交易"));
 
         // 2. 测试 SOLD 商品
-        Long soldGoodsId = createTestGoods("SOLD");
+        Long soldGoodsId = createTestGoods(GoodsStatus.SOLD.getCode());
 
         // 尝试修改 SOLD 商品
         BusinessException ex4 = assertThrows(BusinessException.class, () -> {
@@ -368,7 +369,7 @@ public class OrderConcurrencyTest {
 
         // 尝试上架 SOLD 商品
         BusinessException ex6 = assertThrows(BusinessException.class, () -> {
-            goodsService.updateGoodsStatus(soldGoodsId, "ON_SALE");
+            goodsService.updateGoodsStatus(soldGoodsId, GoodsStatus.ON_SALE.getCode());
         });
         assertEquals(400, ex6.getCode());
         assertTrue(ex6.getMessage().contains("商品已售出，禁止变更状态"));

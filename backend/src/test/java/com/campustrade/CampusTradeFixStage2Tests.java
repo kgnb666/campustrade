@@ -20,6 +20,9 @@ import com.campustrade.mapper.UserMapper;
 import com.campustrade.security.JwtTokenProvider;
 import com.campustrade.service.FileService;
 import com.campustrade.service.GoodsService;
+import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.ReportStatus;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -152,7 +155,7 @@ public class CampusTradeFixStage2Tests {
                 .schoolId(1L)
                 .studentNumber("STU_FIX2_" + testUserEntity.getId())
                 .schoolEmail(TEST_USER + "@mails.tsinghua.edu.cn")
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(now)
                 .createdTime(now)
                 .build());
@@ -176,7 +179,7 @@ public class CampusTradeFixStage2Tests {
                 .schoolId(1L)
                 .studentNumber("STU_FIX2_S_" + sellerUserEntity.getId())
                 .schoolEmail(SELLER_USER + "@mails.tsinghua.edu.cn")
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(now)
                 .createdTime(now)
                 .build());
@@ -191,7 +194,7 @@ public class CampusTradeFixStage2Tests {
                 .price(new BigDecimal("99.00"))
                 .originalPrice(new BigDecimal("199.00"))
                 .conditionLevel("95新")
-                .status("ON_SALE")
+                .status(GoodsStatus.ON_SALE.getCode())
                 .location("紫荆公寓")
                 .viewCount(20)
                 .createdTime(now)
@@ -398,7 +401,7 @@ public class CampusTradeFixStage2Tests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.targetType").value("GOODS"))
-                .andExpect(jsonPath("$.data.status").value("PENDING"));
+                .andExpect(jsonPath("$.data.status").value(ReportStatus.PENDING.getCode()));
 
         // 同时校验落盘的 DB 记录确实是 testUserEntity.getId() 注入的
         Report savedReport = reportMapper.selectOne(

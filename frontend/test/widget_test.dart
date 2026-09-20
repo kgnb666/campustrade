@@ -76,12 +76,13 @@ void main() {
     Get.reset();
   });
 
-  testWidgets('1. 验证首页渲染与 Stage 1 标志', (WidgetTester tester) async {
+  testWidgets('1. 验证首页渲染与能力卡片', (WidgetTester tester) async {
     await tester.pumpWidget(const CampusTradeApp());
     await tester.pumpAndSettle();
 
     expect(find.text('CampusTrade · 校园二手交易平台'), findsOneWidget);
-    expect(find.text('Stage 1：用户中心与校园认证就绪'), findsOneWidget);
+    // 卡片标题只描述能力，不含 "Stage N" 阶段号（见 final_config_sync_test.dart 的守护断言）
+    expect(find.text('用户中心与校园认证就绪'), findsOneWidget);
     expect(find.text('用户登录'), findsOneWidget);
     expect(find.text('新用户注册'), findsOneWidget);
   });

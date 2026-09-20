@@ -10,6 +10,7 @@ import com.campustrade.dto.StudentVerifyDTO;
 import com.campustrade.entity.CampusSchool;
 import com.campustrade.entity.StudentVerify;
 import com.campustrade.entity.User;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.campustrade.exception.BusinessException;
 import com.campustrade.mapper.CampusSchoolMapper;
 import com.campustrade.mapper.StudentVerifyMapper;
@@ -56,8 +57,9 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class StudentVerifyServiceImpl implements StudentVerifyService {
 
-    private static final String STATUS_PENDING = "PENDING";
-    private static final String STATUS_SUCCESS = "SUCCESS";
+    // 状态字面量统一来自枚举：本类只保留短别名，避免把常量名散进每一处比较与查询条件
+    private static final String STATUS_PENDING = StudentVerifyStatus.PENDING.getCode();
+    private static final String STATUS_SUCCESS = StudentVerifyStatus.SUCCESS.getCode();
 
     private final UserMapper userMapper;
     private final CampusSchoolMapper campusSchoolMapper;

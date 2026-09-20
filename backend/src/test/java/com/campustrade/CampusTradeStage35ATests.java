@@ -13,6 +13,8 @@ import com.campustrade.mapper.StudentVerifyMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.service.FavoriteService;
 import com.campustrade.support.TestCredentials;
+import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
@@ -101,7 +103,7 @@ class CampusTradeStage35ATests {
                 .schoolId(1L)
                 .studentNumber("STU" + runId)
                 .schoolEmail(usernameA + "@mails.tsinghua.edu.cn")
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(LocalDateTime.now())
                 .createdTime(LocalDateTime.now())
                 .build();
@@ -116,7 +118,7 @@ class CampusTradeStage35ATests {
                 .description("用于测试 Redis 数据恢复与并发一致性")
                 .price(new BigDecimal("199.00"))
                 .conditionLevel("95新")
-                .status("ON_SALE")
+                .status(GoodsStatus.ON_SALE.getCode())
                 .viewCount(0)
                 .createdTime(LocalDateTime.now())
                 .updatedTime(LocalDateTime.now())

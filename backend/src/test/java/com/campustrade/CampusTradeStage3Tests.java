@@ -24,6 +24,7 @@ import com.campustrade.support.TestCredentials;
 import com.campustrade.vo.AiCategoryVO;
 import com.campustrade.vo.AiDescriptionVO;
 import com.campustrade.vo.AiPriceVO;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
@@ -126,7 +127,7 @@ class CampusTradeStage3Tests {
                 .schoolId(1L)
                 .studentNumber("STU_3A_001")
                 .schoolEmail(userA.getEmail())
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(LocalDateTime.now())
                 .createdTime(LocalDateTime.now())
                 .build());
@@ -163,7 +164,7 @@ class CampusTradeStage3Tests {
                 .schoolId(2L)
                 .studentNumber("STU_3B_002")
                 .schoolEmail(userB.getEmail())
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(LocalDateTime.now())
                 .createdTime(LocalDateTime.now())
                 .build());

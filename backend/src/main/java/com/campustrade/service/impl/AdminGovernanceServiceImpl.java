@@ -254,7 +254,7 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
         } else if (ReportTargetType.REVIEW.getCode().equals(targetType)) {
             Review review = reviewMapper.selectById(targetId);
             if (review != null) {
-                String beforeStatus = review.getStatus() != null ? review.getStatus().name() : "VISIBLE";
+                String beforeStatus = review.getStatus() != null ? review.getStatus().name() : ReviewStatus.VISIBLE.getCode();
                 // 定点更新 + 前置条件：VISIBLE -> AUDIT_REJECTED 的原子跃迁（与 restoreReviewAtomic 对称）
                 int affected = reviewMapper.shieldReviewAtomic(review.getId());
                 if (affected <= 0) {

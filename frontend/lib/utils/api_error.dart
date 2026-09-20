@@ -25,12 +25,9 @@ String describeApiError(
 
   if (error is DioException) {
     // 1. 服务端业务提示优先（响应体结构与成功时一致：{code,message,data,timestamp}）
-    final dynamic data = error.response?.data;
-    if (data is Map) {
-      final String message = (data['message'] ?? '').toString().trim();
-      if (message.isNotEmpty) {
-        return message;
-      }
+    final String? serverMessage = serverMessageOf(error.response?.data);
+    if (serverMessage != null) {
+      return serverMessage;
     }
 
     // 2. 网络类异常给出可操作的兜底文案
@@ -67,6 +64,36 @@ String describeApiError(
   }
   message = message.trim();
   return message.isEmpty ? base : message;
+}
+
+/// 从响应体里读服务端业务提示（响应体结构：`{code,message,data,timestamp}`）。
+///
+/// 返回 null 表示"响应体里没有可用的 message"（不是 Map / 字段缺失 / 只有空白），
+/// 由调用方决定兜底文案。
+///
+/// 这是"服务端 message 从哪来"的**唯一实现**：错误通道（[describeApiError] 从
+/// `DioException.response.data` 取）与"HTTP 成功但业务码非 200"这条防御分支
+/// （[serverMessageOr] 从 `Response.data` 取）都走这里，避免两处各写一遍解析、
+/// 改动时只改一处（此前三个服务类各自实现了同一段取文逻辑）。
+String? serverMessageOf(Object? responseBody) {
+  if (responseBody is Map) {
+    final String message = (responseBody['message'] ?? '').toString().trim();
+    if (message.isNotEmpty) {
+      return message;
+    }
+  }
+  return null;
+}
+
+/// 取服务端业务提示，拿不到时回退调用方给的中文兜底文案。
+///
+/// 用于"HTTP 已经成功（Dio 未抛异常）、但响应体里的业务码不是 200"这一防御分支：
+/// 后端现在把业务错误按业务码映射为真实的 HTTP 状态（400/403/404/409/422/429），
+/// 因此正常路径下这条分支不会被走到——但不能因此把响应体里的业务提示丢掉：
+/// 一旦后端某天回落到"200 + code != 200"（或中间层改写了状态码），
+/// 这里仍能给出服务端原文，而不是一句笼统的"失败"。
+String serverMessageOr(Response<dynamic> response, String fallback) {
+  return serverMessageOf(response.data) ?? fallback;
 }
 
 /// 无服务端 message 时的状态码兜底解释（只覆盖语义足够明确的状态）。

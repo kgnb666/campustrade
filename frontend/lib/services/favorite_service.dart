@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import '../api/dio_client.dart';
+import '../config/app_config.dart';
 import '../models/favorite_model.dart';
 import '../utils/api_error.dart';
 import '../utils/app_logger.dart';
@@ -12,22 +13,13 @@ import '../utils/json_cast.dart';
 class FavoriteService {
   final Dio _dio = DioClient().dio;
 
-  String _serverMessage(Response<dynamic> response, String fallback) {
-    final dynamic data = response.data;
-    if (data is Map) {
-      final String message = (data['message'] ?? '').toString().trim();
-      if (message.isNotEmpty) return message;
-    }
-    return fallback;
-  }
-
   /// 添加收藏
   Future<void> addFavorite(String goodsId) async {
     try {
       final response = await _dio.post('/favorite/$goodsId');
       if (response.statusCode != 200 || response.data['code'] != 200) {
         throw ApiException(
-          _serverMessage(response, '收藏失败'),
+          serverMessageOr(response, '收藏失败'),
           statusCode: response.statusCode,
         );
       }
@@ -43,7 +35,7 @@ class FavoriteService {
       final response = await _dio.delete('/favorite/$goodsId');
       if (response.statusCode != 200 || response.data['code'] != 200) {
         throw ApiException(
-          _serverMessage(response, '取消收藏失败'),
+          serverMessageOr(response, '取消收藏失败'),
           statusCode: response.statusCode,
         );
       }
@@ -61,7 +53,7 @@ class FavoriteService {
         return response.data['data'] == true;
       }
       throw ApiException(
-        _serverMessage(response, '收藏状态查询失败'),
+        serverMessageOr(response, '收藏状态查询失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {
@@ -75,7 +67,7 @@ class FavoriteService {
   /// [cancelToken] 由控制器持有：刷新/离开页面时取消在途请求（见 [GoodsService] 的说明）。
   Future<Map<String, dynamic>> getFavoriteList({
     int page = 1,
-    int size = 10,
+    int size = AppConfig.favoritePageSize,
     CancelToken? cancelToken,
   }) async {
     try {
@@ -97,7 +89,7 @@ class FavoriteService {
         };
       }
       throw ApiException(
-        _serverMessage(response, '收藏列表加载失败'),
+        serverMessageOr(response, '收藏列表加载失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {

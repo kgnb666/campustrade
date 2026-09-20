@@ -15,6 +15,7 @@
 - **生产编排**：[docker-compose.prod.yml](docker-compose.prod.yml)（服务器部署）
 - **生产镜像**：[backend/Dockerfile](backend/Dockerfile)
 - **前端 Web 部署**：[frontend/README.md](frontend/README.md)
+- **安全约定**：用户内容按原文存储、HTML 展示端必须在输出点转义（见下文「安全约定：用户内容的存储与转义」）
 
 ---
 
@@ -227,13 +228,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/quality-gate.ps1
 .\start.ps1 -Mode 6
 
 # 单项执行
-cd backend  && mvn -B test          # 255 项（Testcontainers 自带 PG/Redis/MinIO，不碰开发库；需要可用的 Docker）
+cd backend  && mvn -B test          # 257 项（Testcontainers 自带 PG/Redis/MinIO，不碰开发库；需要可用的 Docker）
 cd frontend && flutter analyze      # 期望 0 issue
-cd frontend && flutter test         # 176 项
+cd frontend && flutter test         # 187 项
 ```
 
-**当前基线（批次 2 交付时实测）**：后端 `mvn -B test` 255 项全绿；`flutter analyze` 0 issue；`flutter test` 176 项全绿。
-各阶段的测试规模变化（189 → 242 → 255 / 142 → 176）见 [CHANGELOG.md](CHANGELOG.md)。
+**当前基线（本批次交付时实测）**：后端 `mvn -B test` 257 项全绿；`flutter analyze` 0 issue；`flutter test` 187 项全绿。
+各阶段的测试规模变化（189 → 242 → 255 → 257 / 142 → 176 → 187）见 [CHANGELOG.md](CHANGELOG.md)。
 
 > **门禁前置检查**：`scripts/quality-gate.ps1` 在跑测试前会先确认 Docker 可用
 > （复用 `scripts/toolchain.ps1` 的 `Test-DockerAvailable`），不可用时打印中文原因与启动方法并以非 0 退出，
@@ -245,6 +246,28 @@ cd frontend && flutter test         # 176 项
 > （`postgres:16.15` / `redis:7.4.11` / `minio/minio:RELEASE.2024-10-13T13-34-11Z`，与 `docker-compose.yml` 一致）。
 > 同理，`scripts/quality-gate.ps1` 刻意**不加载** `.env`：若把 `.env` 的 `SPRING_DATA_REDIS_PASSWORD`
 > 导出到进程环境，测试会去给一个"没设口令的临时 Redis"发 AUTH 而失败。
+
+---
+
+## 安全约定：用户内容的存储与转义
+
+一句话结论：**用户内容按原文存库、按原文出现在 JSON 负载里；任何 HTML 展示端都必须在输出点转义。**
+
+- **当前唯一展示端是 Flutter 客户端**：商品描述、评价正文、举报原因等用户内容都经 `Text` 组件
+  **按纯文本渲染，不解析 HTML**。因此后端不做输入侧"黑名单清洗"——
+  那种做法既会破坏正常文本（`javascript` → `java`、`<3 这本书` 整段消失，且不可逆），
+  也永远列不全（`<ScRiPt>`、事件属性等都能绕过），反而让人误以为"已经洗过了"。
+- **新增 HTML 展示端时（后台管理页 / 邮件模板 / 导出报表 / 静态回调页）必须做两件事**：
+  1. 在真正输出用户内容的那一处调用 `com.campustrade.common.util.HtmlEscapeUtils.escape(text)`
+     （HTML 文本节点与属性值都适用），或改用模板引擎的自动转义并显式标注"已转义"；
+  2. 同步更新本节与守护测试的断言，让新事实同样可验证。
+- **这条约定由测试守护，不靠自觉**：`backend/src/test/java/com/campustrade/BackendHtmlSurfaceGuardTests.java`
+  在每次 `mvn test` 时扫描 `backend/src/main/resources`，只要出现 `templates/` 目录或
+  `.html` / `.ftl` / `.vm` / `.mustache` / `.jsp` 等模板类文件就会**失败**并给出上述两个步骤，
+  以免"后端没有 HTML 出口"这个前提被悄悄推翻却没人重新评审转义策略。
+
+> `HtmlEscapeUtils` 只提供输出侧能力：`escape(...)` 用于转义，`containsHtmlMarkup(...)` 仅用于审计观测、
+> **绝不据此改写内容**。发现用户内容里含标签时，正确处置是"在该 HTML 输出点转义"，而不是回写数据库。
 
 ---
 
@@ -470,7 +493,9 @@ cd frontend && flutter build web --dart-define=API_BASE_URL=https://app.example.
 - [x] 终审修复：资料回写改定点更新、订单详情串单、生产拒绝已知开发口令、历史审计报告加"已过时"抬头
 - [x] 批次 1（后端）：可信代理解析、AI 配额、校园邮箱发送配额、token 端点限流、上传加固、V12 迁移
 - [x] 批次 2（前端）：控制器作用域与 binding、CancelToken、页面守卫与统一提示、AppLogger、冒烟测试骨架
-- [x] 工程化收尾（本批次）：门禁 Docker 前置检查、CI 与本地门禁对齐、镜像 tag 固定、CHANGELOG/CONTRIBUTING、stage7/8 报告
-- [x] 测试基线：后端 `mvn -B test` **255 项**、`flutter analyze` 0 issue、`flutter test` **176 项**（全绿）
+- [x] 工程化收尾（批次 3）：门禁 Docker 前置检查、CI 与本地门禁对齐、镜像 tag 固定、CHANGELOG/CONTRIBUTING、stage7/8 报告
+- [x] 代码整洁收尾（本批次）：JWT 令牌 userId 与数据库用户比对、认证测试用例自治、`StudentVerifyStatus` 枚举化、
+      测试裸状态字面量收敛、前端 `_serverMessage` 统一与 pageSize/版本号收敛、HTML 展示端守护测试
+- [x] 测试基线：后端 `mvn -B test` **257 项**、`flutter analyze` 0 issue、`flutter test` **187 项**（全绿）
 
 > 各阶段的提交、验证结论与测试项数变化见 [CHANGELOG.md](CHANGELOG.md)。

@@ -114,7 +114,7 @@ docker compose ps
 
 ```bash
 cd backend
-mvn -B test              # 255 项；中间件由 Testcontainers 现拉现用，不碰开发库（需要可用的 Docker）
+mvn -B test              # 257 项；中间件由 Testcontainers 现拉现用，不碰开发库（需要可用的 Docker）
 mvn spring-boot:run      # 或双击 backend/run-backend.cmd（自动加载项目根目录 .env）
 ```
 后端监听 `http://127.0.0.1:8080`，上下文路径 `/api`。
@@ -126,7 +126,7 @@ mvn spring-boot:run      # 或双击 backend/run-backend.cmd（自动加载项�
 cd frontend
 flutter pub get
 flutter analyze          # 期望 0 issue
-flutter test             # 176 项
+flutter test             # 187 项
 flutter run -d chrome    # 或双击 frontend/run-frontend.cmd run -d chrome
 ```
 Web 端 API 基址默认 `http://127.0.0.1:8080/api`（`lib/config/app_config.dart`），
@@ -234,7 +234,7 @@ CampusTrade/
 │   │   ├── services/                   # 网络、存储、登录态等全局服务
 │   │   ├── utils/ widgets/             # 工具与通用组件
 │   │   └── main.dart
-│   ├── test/                           # Widget/单元测试（176 项）
+│   ├── test/                           # Widget/单元测试（187 项）
 │   └── web/                            # Web 入口（index.html、manifest、icons）
 ├── docker/
 │   └── postgres/init.sql               # 仅 CREATE SCHEMA + 授权（无业务建表语句）
@@ -293,5 +293,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/quality-gate.ps1 -On
 不可用时打印中文原因与启动方法并以非 0 退出；因此 `JWT_SECRET` 等环境变量既不需要在本地导出，
 也不需要在 CI 注入（测试自带随机密钥，见 `TestContainersConfig`）。
 
-**基线（批次 2 实测）**：后端 `mvn -B test` **255 项**全绿、`flutter analyze` 0 issue、`flutter test` **176 项**全绿。
-（阶段 8 交付时为 242 / 142；测试项数变化见 [CHANGELOG.md](../CHANGELOG.md)。）
+**基线（本批次实测）**：后端 `mvn -B test` **257 项**全绿、`flutter analyze` 0 issue、`flutter test` **187 项**全绿。
+（阶段 8 交付时为 242 / 142，批次 2 为 255 / 176；测试项数变化见 [CHANGELOG.md](../CHANGELOG.md)。）

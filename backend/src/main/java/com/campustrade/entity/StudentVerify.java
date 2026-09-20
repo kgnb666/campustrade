@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.campustrade.enums.StudentVerifyStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -41,11 +42,12 @@ public class StudentVerify implements Serializable {
     private String verifyCode;
 
     /**
-     * 认证状态: PENDING, SUCCESS, FAILED
+     * 认证状态：取值来自 {@link StudentVerifyStatus}（数据库 CHECK 只允许 PENDING / SUCCESS）。
+     * 列本身仍是字符串，接口响应体与落库内容不受影响。
      */
     @Builder.Default
     @TableField("verify_status")
-    private String verifyStatus = "PENDING";
+    private String verifyStatus = StudentVerifyStatus.PENDING.getCode();
 
     @TableField("verify_time")
     private LocalDateTime verifyTime;

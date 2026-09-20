@@ -1,7 +1,20 @@
 /// CampusTrade 客户端全局配置
 class AppConfig {
   static const String appName = 'CampusTrade';
-  static const String appVersion = '1.0.0 (Stage 0)';
+
+  /// 客户端版本号，与 `pubspec.yaml` 的 `version:` 保持一致。
+  ///
+  /// **改 pubspec.yaml 的 version 时请同步改这里。**
+  ///
+  /// 为什么不从运行期读取：Flutter 没有"读取自身 pubspec 版本"的内置能力，官方做法是引入
+  /// `package_info_plus`（平台插件，需要在各平台注册通道）。为展示一个版本号引入原生插件，
+  /// 会让 Web/测试环境多出一条平台依赖与失败面，收益不成正比；因此这里保持常量，
+  /// 并由 `test/app_version_consistency_test.dart` 直接比对 pubspec.yaml，让"两处不一致"在
+  /// `flutter test` 时就失败，而不是靠人记得同步。
+  ///
+  /// 格式与 pubspec 一致（`<version>+<build>`），不再拼接阶段号：
+  /// 阶段号是开发过程信息，会随批次变化，放在用户可见的版本号里只会过期。
+  static const String appVersion = '1.0.0+1';
 
   /// API 基础请求路径 (可通过 dart-define 动态指定)
   static const String apiBaseUrl = String.fromEnvironment(

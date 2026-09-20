@@ -33,6 +33,15 @@ import java.time.LocalDateTime;
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
 
+    /**
+     * 个人中心 {@code verifyStatus} 的兜底取值：该用户一条认证记录都没有。
+     *
+     * <p>刻意不放进 {@code StudentVerifyStatus} 枚举——它不是
+     * {@code student_verify.verify_status} 的落库取值（V10 的 CHECK 只允许 PENDING / SUCCESS），
+     * 而是"没有任何认证行"这一情况的展示标记。命名成常量是为了不再出现在业务代码里裸写的情况。</p>
+     */
+    private static final String VERIFY_STATUS_NONE = "NONE";
+
     private final UserMapper userMapper;
     private final UserCreditMapper userCreditMapper;
     private final StudentVerifyMapper studentVerifyMapper;
@@ -75,7 +84,9 @@ public class UserServiceImpl implements UserService {
                         .last("LIMIT 1")
         );
 
-        String verifyStatus = "NONE";
+        // 个人中心展示用的兜底取值：用户一条认证记录都没有时，接口回 "NONE" 而不是 null。
+        // 它不是 student_verify.verify_status 的落库取值，因此不放进 StudentVerifyStatus 枚举。
+        String verifyStatus = VERIFY_STATUS_NONE;
         String schoolName = null;
         String studentNumber = null;
 

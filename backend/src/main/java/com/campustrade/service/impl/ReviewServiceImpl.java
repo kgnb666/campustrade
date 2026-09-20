@@ -494,7 +494,7 @@ public class ReviewServiceImpl implements ReviewService {
                 .content(review.getContent())
                 .tags(tagsList)
                 .isAnonymous(isAnonymous)
-                .status(review.getStatus() != null ? review.getStatus().name() : "VISIBLE")
+                .status(review.getStatus() != null ? review.getStatus().name() : ReviewStatus.VISIBLE.getCode())
                 .likeCount(review.getLikeCount() != null ? review.getLikeCount() : 0)
                 .likedByCurrentUser(isLiked != null ? isLiked : false)
                 .createdTime(review.getCreatedTime())

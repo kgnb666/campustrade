@@ -10,6 +10,9 @@ import com.campustrade.mapper.*;
 import com.campustrade.service.OrderService;
 import com.campustrade.service.ai.DeepSeekClient;
 import com.campustrade.support.TestCredentials;
+import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.OrderStatus;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -143,7 +146,7 @@ class CampusTradeStage4CTests {
                 .schoolId(schoolId)
                 .studentNumber("STU_" + UUID.randomUUID().toString().substring(0, 8))
                 .schoolEmail(email)
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(LocalDateTime.now())
                 .createdTime(LocalDateTime.now())
                 .build());
@@ -172,7 +175,7 @@ class CampusTradeStage4CTests {
                 .price(price != null ? price : new BigDecimal("299.00"))
                 .originalPrice(new BigDecimal("599.00"))
                 .conditionLevel("95新")
-                .status(status != null ? status : "ON_SALE")
+                .status(status != null ? status : GoodsStatus.ON_SALE.getCode())
                 .location("学子食堂西门")
                 .viewCount(5)
                 .createdTime(LocalDateTime.now())
@@ -206,7 +209,7 @@ class CampusTradeStage4CTests {
     @DisplayName("1. 创建订单 API 成功 - 校验商品锁定、快照完整性与初始状态")
     void test01_create_order_api_success() throws Exception {
         BigDecimal price = new BigDecimal("450.00");
-        Long goodsId = createTestGoods(sellerId, "ON_SALE", price);
+        Long goodsId = createTestGoods(sellerId, GoodsStatus.ON_SALE.getCode(), price);
 
         CreateOrderRequest request = CreateOrderRequest.builder()
                 .goodsId(goodsId)
@@ -221,7 +224,7 @@ class CampusTradeStage4CTests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.orderNo").isNotEmpty())
-                .andExpect(jsonPath("$.data.orderStatus").value("WAIT_SELLER_CONFIRM"))
+                .andExpect(jsonPath("$.data.orderStatus").value(OrderStatus.WAIT_SELLER_CONFIRM.getCode()))
                 .andExpect(jsonPath("$.data.statusDesc").value("待卖家确认"))
                 .andExpect(jsonPath("$.data.goodsId").value(goodsId))
                 .andExpect(jsonPath("$.data.goodsPriceSnapshot").value(450.00))
@@ -234,7 +237,7 @@ class CampusTradeStage4CTests {
 
         // 验证数据库中商品状态自动锁定为 LOCKED
         Goods updatedGoods = goodsMapper.selectById(goodsId);
-        assertEquals("LOCKED", updatedGoods.getStatus(), "下单后商品状态必须锁定为 LOCKED");
+        assertEquals(GoodsStatus.LOCKED.getCode(), updatedGoods.getStatus(), "下单后商品状态必须锁定为 LOCKED");
     }
 
     @Test
@@ -282,7 +285,7 @@ class CampusTradeStage4CTests {
     @Order(3)
     @DisplayName("3. 查询订单成功 - 验证 /api/orders/my (买家/卖家视角) 与 /api/orders/{id}")
     void test03_query_orders_success() throws Exception {
-        Long goodsId = createTestGoods(sellerId, "ON_SALE", new BigDecimal("120.00"));
+        Long goodsId = createTestGoods(sellerId, GoodsStatus.ON_SALE.getCode(), new BigDecimal("120.00"));
         TradeOrder order = orderService.createOrder(buyerId, goodsId, "二餐门口", "查询测试");
 
         // 1. 买家查询我的订单
@@ -293,7 +296,7 @@ class CampusTradeStage4CTests {
                 .andExpect(jsonPath("$.code").value(200))
                 .andExpect(jsonPath("$.data.records").isArray())
                 .andExpect(jsonPath("$.data.records[0].id").value(order.getId()))
-                .andExpect(jsonPath("$.data.records[0].orderStatus").value("WAIT_SELLER_CONFIRM"));
+                .andExpect(jsonPath("$.data.records[0].orderStatus").value(OrderStatus.WAIT_SELLER_CONFIRM.getCode()));
 
         // 2. 卖家查询我的订单
         mockMvc.perform(get("/api/orders/my")
@@ -324,7 +327,7 @@ class CampusTradeStage4CTests {
     @Order(4)
     @DisplayName("4. 第三方无关用户查看订单详情返回 403")
     void test04_third_party_view_order_returns_403() throws Exception {
-        Long goodsId = createTestGoods(sellerId, "ON_SALE", new BigDecimal("200.00"));
+        Long goodsId = createTestGoods(sellerId, GoodsStatus.ON_SALE.getCode(), new BigDecimal("200.00"));
         TradeOrder order = orderService.createOrder(buyerId, goodsId, "操场", "第三方测试");
 
         mockMvc.perform(get("/api/orders/" + order.getId())
@@ -337,14 +340,14 @@ class CampusTradeStage4CTests {
     @Order(5)
     @DisplayName("5. 卖家确认接单成功 - 订单状态变更为 WAIT_MEET")
     void test05_seller_confirm_order_success() throws Exception {
-        Long goodsId = createTestGoods(sellerId, "ON_SALE", new BigDecimal("320.00"));
+        Long goodsId = createTestGoods(sellerId, GoodsStatus.ON_SALE.getCode(), new BigDecimal("320.00"));
         TradeOrder order = orderService.createOrder(buyerId, goodsId, "东门", "接单测试");
 
         mockMvc.perform(put("/api/orders/" + order.getId() + "/confirm")
                         .header("Authorization", "Bearer " + tokenSeller))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.orderStatus").value("WAIT_MEET"))
+                .andExpect(jsonPath("$.data.orderStatus").value(OrderStatus.WAIT_MEET.getCode()))
                 .andExpect(jsonPath("$.data.statusDesc").value("待面交"))
                 .andExpect(jsonPath("$.data.confirmedTime").isNotEmpty());
     }
@@ -353,7 +356,7 @@ class CampusTradeStage4CTests {
     @Order(6)
     @DisplayName("6. 非卖家尝试确认接单返回 403 (买家或第三方)")
     void test06_non_seller_confirm_order_returns_403() throws Exception {
-        Long goodsId = createTestGoods(sellerId, "ON_SALE", new BigDecimal("180.00"));
+        Long goodsId = createTestGoods(sellerId, GoodsStatus.ON_SALE.getCode(), new BigDecimal("180.00"));
         TradeOrder order = orderService.createOrder(buyerId, goodsId, "南门", "权限测试");
 
         // 1. 买家尝试 confirm
@@ -373,7 +376,7 @@ class CampusTradeStage4CTests {
     @Order(7)
     @DisplayName("7. 取消订单成功 - 订单变 CANCELLED，商品状态原子恢复为 ON_SALE")
     void test07_cancel_order_success() throws Exception {
-        Long goodsId = createTestGoods(sellerId, "ON_SALE", new BigDecimal("550.00"));
+        Long goodsId = createTestGoods(sellerId, GoodsStatus.ON_SALE.getCode(), new BigDecimal("550.00"));
         TradeOrder order = orderService.createOrder(buyerId, goodsId, "西门", "取消测试");
 
         CancelOrderRequest req = CancelOrderRequest.builder()
@@ -386,21 +389,21 @@ class CampusTradeStage4CTests {
                         .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.orderStatus").value("CANCELLED"))
+                .andExpect(jsonPath("$.data.orderStatus").value(OrderStatus.CANCELLED.getCode()))
                 .andExpect(jsonPath("$.data.statusDesc").value("已取消"))
                 .andExpect(jsonPath("$.data.cancelReason").value("临时有事出差，取消面交"))
                 .andExpect(jsonPath("$.data.cancelledBy").value(buyerId));
 
         // 验证商品自动恢复为 ON_SALE
         Goods restoredGoods = goodsMapper.selectById(goodsId);
-        assertEquals("ON_SALE", restoredGoods.getStatus());
+        assertEquals(GoodsStatus.ON_SALE.getCode(), restoredGoods.getStatus());
     }
 
     @Test
     @Order(8)
     @DisplayName("8. 取消订单原因为空失败 - 返回 400 参数错误")
     void test08_cancel_order_empty_reason_fails() throws Exception {
-        Long goodsId = createTestGoods(sellerId, "ON_SALE", new BigDecimal("60.00"));
+        Long goodsId = createTestGoods(sellerId, GoodsStatus.ON_SALE.getCode(), new BigDecimal("60.00"));
         TradeOrder order = orderService.createOrder(buyerId, goodsId, "宿舍楼", "留言");
 
         // 1. 空字符串
@@ -432,7 +435,7 @@ class CampusTradeStage4CTests {
     @Order(9)
     @DisplayName("9. 完成交易成功 - 状态变 COMPLETED，商品变 SOLD，买卖双方 trade_count + 1")
     void test09_complete_trade_success() throws Exception {
-        Long goodsId = createTestGoods(sellerId, "ON_SALE", new BigDecimal("800.00"));
+        Long goodsId = createTestGoods(sellerId, GoodsStatus.ON_SALE.getCode(), new BigDecimal("800.00"));
         TradeOrder order = orderService.createOrder(buyerId, goodsId, "学子超市", "完成测试");
 
         // 先确认接单
@@ -454,13 +457,13 @@ class CampusTradeStage4CTests {
                         .header("Authorization", "Bearer " + tokenBuyer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.orderStatus").value("COMPLETED"))
+                .andExpect(jsonPath("$.data.orderStatus").value(OrderStatus.COMPLETED.getCode()))
                 .andExpect(jsonPath("$.data.statusDesc").value("已完成"))
                 .andExpect(jsonPath("$.data.completedTime").isNotEmpty());
 
         // 验证商品变更为 SOLD
         Goods soldGoods = goodsMapper.selectById(goodsId);
-        assertEquals("SOLD", soldGoods.getStatus());
+        assertEquals(GoodsStatus.SOLD.getCode(), soldGoods.getStatus());
 
         // 验证双方信用记录
         UserCredit buyerCreditAfter = userCreditMapper.selectOne(

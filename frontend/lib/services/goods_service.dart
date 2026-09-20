@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 // Uint8List（图片字节）
 import 'dart:typed_data';
 import '../api/dio_client.dart';
+import '../config/app_config.dart';
 import '../models/category_model.dart';
 import '../models/goods_model.dart';
 import '../utils/api_error.dart';
@@ -21,17 +22,6 @@ import '../utils/json_cast.dart';
 class GoodsService {
   final Dio _dio = DioClient().dio;
 
-  /// 安全取出服务端业务提示（响应体结构：{code,message,data,timestamp}），
-  /// 拿不到时回退为调用方给的中文兜底文案。
-  String _serverMessage(Response<dynamic> response, String fallback) {
-    final dynamic data = response.data;
-    if (data is Map) {
-      final String message = (data['message'] ?? '').toString().trim();
-      if (message.isNotEmpty) return message;
-    }
-    return fallback;
-  }
-
   /// 获取商品树形分类列表
   Future<List<CategoryModel>> getCategories({CancelToken? cancelToken}) async {
     try {
@@ -43,7 +33,7 @@ class GoodsService {
             .toList();
       }
       throw ApiException(
-        _serverMessage(response, '分类加载失败'),
+        serverMessageOr(response, '分类加载失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {
@@ -55,7 +45,7 @@ class GoodsService {
   /// 分页搜索筛选商品列表
   Future<Map<String, dynamic>> getGoodsList({
     int page = 1,
-    int size = 10,
+    int size = AppConfig.goodsPageSize,
     String? keyword,
     String? categoryId,
     String? schoolId,
@@ -103,7 +93,7 @@ class GoodsService {
       };
     }
     throw ApiException(
-      _serverMessage(response, '商品列表加载失败'),
+      serverMessageOr(response, '商品列表加载失败'),
       statusCode: response.statusCode,
     );
   }
@@ -121,7 +111,7 @@ class GoodsService {
         return GoodsDetailModel.fromJson(data);
       }
       throw ApiException(
-        _serverMessage(response, '商品详情加载失败'),
+        serverMessageOr(response, '商品详情加载失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {
@@ -140,7 +130,7 @@ class GoodsService {
         return response.data['data']?.toString() ?? '';
       }
       throw ApiException(
-        _serverMessage(response, '发布商品失败'),
+        serverMessageOr(response, '发布商品失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {
@@ -155,7 +145,7 @@ class GoodsService {
       final response = await _dio.put('/goods/$id', data: data);
       if (response.statusCode != 200 || response.data['code'] != 200) {
         throw ApiException(
-        _serverMessage(response, '修改商品失败'),
+        serverMessageOr(response, '修改商品失败'),
         statusCode: response.statusCode,
       );
       }
@@ -171,7 +161,7 @@ class GoodsService {
       final response = await _dio.delete('/goods/$id');
       if (response.statusCode != 200 || response.data['code'] != 200) {
         throw ApiException(
-        _serverMessage(response, '删除商品失败'),
+        serverMessageOr(response, '删除商品失败'),
         statusCode: response.statusCode,
       );
       }
@@ -190,7 +180,7 @@ class GoodsService {
       );
       if (response.statusCode != 200 || response.data['code'] != 200) {
         throw ApiException(
-        _serverMessage(response, '更新状态失败'),
+        serverMessageOr(response, '更新状态失败'),
         statusCode: response.statusCode,
       );
       }
@@ -211,7 +201,7 @@ class GoodsService {
             .toList();
       }
       throw ApiException(
-        _serverMessage(response, '我的商品加载失败'),
+        serverMessageOr(response, '我的商品加载失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {
@@ -229,7 +219,7 @@ class GoodsService {
     double? maxPrice,
     String? sort,
     int page = 1,
-    int size = 10,
+    int size = AppConfig.goodsPageSize,
     CancelToken? cancelToken,
   }) async {
     final Map<String, dynamic> queryParams = {
@@ -265,7 +255,7 @@ class GoodsService {
         return <String>[];
       }
       throw ApiException(
-        _serverMessage(response, '热搜加载失败'),
+        serverMessageOr(response, '热搜加载失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {
@@ -286,7 +276,7 @@ class GoodsService {
         return <String>[];
       }
       throw ApiException(
-        _serverMessage(response, '搜索历史加载失败'),
+        serverMessageOr(response, '搜索历史加载失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {
@@ -307,7 +297,7 @@ class GoodsService {
         return response.data['data'] as String;
       }
       throw ApiException(
-        _serverMessage(response, '图片上传失败'),
+        serverMessageOr(response, '图片上传失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {

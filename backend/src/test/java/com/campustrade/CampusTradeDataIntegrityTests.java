@@ -27,6 +27,8 @@ import com.campustrade.service.CreditService;
 import com.campustrade.service.GoodsService;
 import com.campustrade.service.OrderService;
 import com.campustrade.service.ReviewService;
+import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.ReportStatus;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -68,6 +70,16 @@ import static org.junit.jupiter.api.Assertions.*;
 @SpringBootTest
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 class CampusTradeDataIntegrityTests {
+
+    /**
+     * 测试内部使用的"本轮操作成功"标记。
+     *
+     * <p>它不是任何领域状态（不落库、不出现在接口里），只是在本用例里区分
+     * "线程里那一步成功了"与"抛异常了"，因此刻意不引用任何状态枚举——
+     * 引用一个业务枚举反而会让人误以为它在断言业务状态。</p>
+     */
+    private static final String OUTCOME_SUCCESS = "SUCCESS";
+
 
     private static final Long SELLER_ID = 9200001L;
     private static final Long BUYER_ID = 9200002L;
@@ -283,7 +295,7 @@ class CampusTradeDataIntegrityTests {
         int pendingDelta = 30;
 
         for (int round = 0; round < rounds; round++) {
-            Long goodsId = createGoods("ON_SALE", baseViews);
+            Long goodsId = createGoods(GoodsStatus.ON_SALE.getCode(), baseViews);
             String viewKey = RedisKeyConstants.goodsViewKey(goodsId);
             stringRedisTemplate.opsForValue().set(viewKey, String.valueOf(pendingDelta));
             stringRedisTemplate.opsForSet().add(RedisKeyConstants.GOODS_VIEW_DIRTY_IDS, goodsId.toString());
@@ -298,7 +310,7 @@ class CampusTradeDataIntegrityTests {
                 try {
                     startLatch.await();
                     orderService.createOrder(BUYER_ID, goodsId, "图书馆一楼", "并发下单锁货");
-                    orderOutcome.set("SUCCESS");
+                    orderOutcome.set(OUTCOME_SUCCESS);
                 } catch (Exception e) {
                     orderOutcome.set("FAILED: " + e.getMessage());
                 } finally {
@@ -309,7 +321,7 @@ class CampusTradeDataIntegrityTests {
                 try {
                     startLatch.await();
                     goodsService.syncViewCounts();
-                    syncOutcome.set("SUCCESS");
+                    syncOutcome.set(OUTCOME_SUCCESS);
                 } catch (Exception e) {
                     syncOutcome.set("FAILED: " + e.getMessage());
                 } finally {
@@ -321,13 +333,13 @@ class CampusTradeDataIntegrityTests {
             assertTrue(doneLatch.await(20, TimeUnit.SECONDS), "并发下单与浏览量同步必须在 20 秒内完成");
             executor.shutdown();
 
-            assertEquals("SUCCESS", orderOutcome.get(), "下单锁货必须成功: " + orderOutcome.get());
-            assertEquals("SUCCESS", syncOutcome.get(), "浏览量同步必须成功: " + syncOutcome.get());
+            assertEquals(OUTCOME_SUCCESS, orderOutcome.get(), "下单锁货必须成功: " + orderOutcome.get());
+            assertEquals(OUTCOME_SUCCESS, syncOutcome.get(), "浏览量同步必须成功: " + syncOutcome.get());
 
             Goods after = goodsMapper.selectById(goodsId);
             assertNotNull(after);
             // 整行回写缺陷的典型症状：浏览量同步把订单刚写入的 LOCKED 覆盖回 ON_SALE
-            assertEquals("LOCKED", after.getStatus(),
+            assertEquals(GoodsStatus.LOCKED.getCode(), after.getStatus(),
                     "并发浏览量同步绝不能把订单锁定的商品状态回退（第 " + (round + 1) + " 轮）");
             // 整行回写缺陷的另一个症状：下单锁货把读取时刻的旧 view_count 覆盖回去
             assertEquals(baseViews + pendingDelta, after.getViewCount(),
@@ -354,7 +366,7 @@ class CampusTradeDataIntegrityTests {
         int baseViews = 100;
         int pendingDelta = 17;
 
-        Long goodsId = createGoods("ON_SALE", baseViews);
+        Long goodsId = createGoods(GoodsStatus.ON_SALE.getCode(), baseViews);
         String viewKey = RedisKeyConstants.goodsViewKey(goodsId);
         stringRedisTemplate.opsForValue().set(viewKey, String.valueOf(pendingDelta));
         stringRedisTemplate.opsForSet().add(RedisKeyConstants.GOODS_VIEW_DIRTY_IDS, goodsId.toString());
@@ -420,7 +432,7 @@ class CampusTradeDataIntegrityTests {
     @Order(3)
     @DisplayName("3. 并发处理同一举报工单：只有一次生效，admin_audit_log 只新增一条")
     void test03_concurrentReportHandling_onlyOneTakesEffect() throws Exception {
-        Long goodsId = createGoods("ON_SALE", 50);
+        Long goodsId = createGoods(GoodsStatus.ON_SALE.getCode(), 50);
 
         Report report = Report.builder()
                 .reporterId(BUYER_ID)
@@ -428,7 +440,7 @@ class CampusTradeDataIntegrityTests {
                 .targetId(goodsId)
                 .reasonType("FRAUD")
                 .description("并发治理回归测试")
-                .status("PENDING")
+                .status(ReportStatus.PENDING.getCode())
                 .createdTime(LocalDateTime.now())
                 .updatedTime(LocalDateTime.now())
                 .build();
@@ -452,7 +464,7 @@ class CampusTradeDataIntegrityTests {
                     startLatch.await();
                     adminGovernanceService.handleReport(ADMIN_ID, ADMIN_USERNAME, report.getId(), request, "127.0.0.1");
                     successCount.incrementAndGet();
-                    outcomes.add("SUCCESS");
+                    outcomes.add(OUTCOME_SUCCESS);
                 } catch (Exception e) {
                     failureCount.incrementAndGet();
                     String code = (e instanceof BusinessException be) ? String.valueOf(be.getCode()) : "NON_BUSINESS";
@@ -471,14 +483,14 @@ class CampusTradeDataIntegrityTests {
         assertEquals(1, failureCount.get(), "另一个管理员必须被明确拒绝，实际结果: " + outcomes);
 
         Report finalReport = reportMapper.selectById(report.getId());
-        assertEquals("HANDLED_VALID", finalReport.getStatus(), "工单最终状态必须为 HANDLED_VALID");
+        assertEquals(ReportStatus.HANDLED_VALID.getCode(), finalReport.getStatus(), "工单最终状态必须为 HANDLED_VALID");
 
         Integer reportAuditRows = jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM campus_trade.admin_audit_log WHERE target_type = 'REPORT' AND target_id = ?",
                 Integer.class, report.getId());
         assertEquals(1, reportAuditRows, "并发处理同一工单时审计流水只能新增一条");
 
-        assertEquals("OFF_SHELF", goodsMapper.selectById(goodsId).getStatus(),
+        assertEquals(GoodsStatus.OFF_SHELF.getCode(), goodsMapper.selectById(goodsId).getStatus(),
                 "治理动作（下架）必须只执行一次且生效");
 
         System.out.printf("[场景3] 并发处理结果: %s | 工单状态=%s | 审计条数=%d%n",
@@ -493,7 +505,7 @@ class CampusTradeDataIntegrityTests {
     @Order(4)
     @DisplayName("4. 信用对账与三次治理动作：屏蔽→恢复→再次屏蔽 必须各自生效")
     void test04_creditReconciliation_shieldRestoreShieldCycle() {
-        Long goodsId = createGoods("SOLD", 0);
+        Long goodsId = createGoods(GoodsStatus.SOLD.getCode(), 0);
         TradeOrder order = createCompletedOrder(goodsId);
         Review review = createVisibleReview(order.getId(), goodsId, 5);
 
@@ -578,7 +590,7 @@ class CampusTradeDataIntegrityTests {
                 .targetId(reviewId)
                 .reasonType("MALICIOUS_REVIEW")
                 .description(note)
-                .status("PENDING")
+                .status(ReportStatus.PENDING.getCode())
                 .createdTime(LocalDateTime.now())
                 .updatedTime(LocalDateTime.now())
                 .build();
@@ -645,7 +657,7 @@ class CampusTradeDataIntegrityTests {
     @Order(6)
     @DisplayName("6. 并发重复评价：只有一次成功，另一次必须得到 409 业务错误而不是 500")
     void test06_concurrentDuplicateReview_returns409() throws Exception {
-        Long goodsId = createGoods("SOLD", 0);
+        Long goodsId = createGoods(GoodsStatus.SOLD.getCode(), 0);
         TradeOrder order = createCompletedOrder(goodsId);
 
         resetCreditState(SELLER_ID);

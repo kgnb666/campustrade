@@ -16,6 +16,7 @@ import com.campustrade.security.JwtAuthenticationFilter;
 import com.campustrade.service.StudentVerifyService;
 import com.campustrade.service.mail.VerifyCodeMailSender;
 import com.campustrade.support.TestCredentials;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
@@ -306,7 +307,7 @@ class CampusTradeStage1Tests {
                         .orderByDesc(StudentVerify::getCreatedTime)
                         .last("LIMIT 1"));
         assertNotNull(stillPending);
-        assertNotEquals("SUCCESS", stillPending.getVerifyStatus(),
+        assertNotEquals(StudentVerifyStatus.SUCCESS.getCode(), stillPending.getVerifyStatus(),
                 "验证码未核销成功时，认证状态绝不能变为 SUCCESS");
 
         // 4. 重新发送后可正常认证：失败计数被重置，新验证码生效（响应仍不回传验证码）
@@ -330,7 +331,7 @@ class CampusTradeStage1Tests {
         StudentVerify verifyRecord = studentVerifyMapper.selectOne(
                 new LambdaQueryWrapper<StudentVerify>()
                         .eq(StudentVerify::getUserId, user.getId())
-                        .eq(StudentVerify::getVerifyStatus, "SUCCESS")
+                        .eq(StudentVerify::getVerifyStatus, StudentVerifyStatus.SUCCESS.getCode())
         );
         assertNotNull(verifyRecord, "认证状态应已更新为 SUCCESS");
         assertNotNull(verifyRecord.getVerifyTime(), "应记录认证通过时间");
@@ -344,7 +345,7 @@ class CampusTradeStage1Tests {
         mockMvc.perform(get("/user/profile")
                         .header("Authorization", "Bearer " + userAccessToken))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.verifyStatus").value("SUCCESS"))
+                .andExpect(jsonPath("$.data.verifyStatus").value(StudentVerifyStatus.SUCCESS.getCode()))
                 .andExpect(jsonPath("$.data.schoolName").value("清华大学"));
 
         // 5. 用户维度限流：同一用户 10 分钟内第 4 次请求被拒绝（前三次已用掉配额）

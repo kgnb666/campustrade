@@ -34,6 +34,7 @@ import com.campustrade.service.AdminGovernanceService;
 import com.campustrade.service.CreditService;
 import com.campustrade.service.ReviewService;
 import com.campustrade.support.TestCredentials;
+import com.campustrade.enums.ReportStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -315,6 +316,10 @@ class CampusTradeStage7DTests {
     @Test
     @DisplayName("5. GoodsStatus 与 V10 CHECK 约束取值域一致，且状态字面量只来自枚举")
     void test05_goodsStatusIsTheOnlySourceOfStatusLiterals() {
+        // 这里的字面量**刻意**保留（本批次唯一保留状态字面量的地方）：
+        // 它们是"被比对的外部真相"——V10 迁移里 CHECK 约束的取值域，而不是又一次抄枚举。
+        // 若有人改动 GoodsStatus 的常量名，这条断言会立即失败（并连带提醒需要新迁移同步数据库约束），
+        // 因此它不属于"枚举改名后测试静默漏改"那一类风险；改成 GoodsStatus.*.getCode() 自比只会变成恒真。
         assertEquals(Set.of("DRAFT", "ON_SALE", "LOCKED", "SOLD", "OFF_SHELF"),
                 Set.of(GoodsStatus.allCodes()), "枚举取值必须与 V10 CHECK 约束完全一致");
 
@@ -328,7 +333,7 @@ class CampusTradeStage7DTests {
         assertNull(GoodsStatus.fromCode("BOGUS"));
         assertNull(GoodsStatus.fromCode(null));
         assertTrue(GoodsStatus.LOCKED.matches("locked"));
-        assertFalse(GoodsStatus.LOCKED.matches("ON_SALE"));
+        assertFalse(GoodsStatus.LOCKED.matches(GoodsStatus.ON_SALE.getCode()));
         assertFalse(GoodsStatus.LOCKED.matches(null));
 
         // 数据库侧 CHECK 约束与枚举必须同域（真实读一次约束定义）
@@ -621,7 +626,7 @@ class CampusTradeStage7DTests {
                 .targetId(reviewId)
                 .reasonType("MALICIOUS_REVIEW")
                 .description(note)
-                .status("PENDING")
+                .status(ReportStatus.PENDING.getCode())
                 .createdTime(LocalDateTime.now())
                 .updatedTime(LocalDateTime.now())
                 .build();

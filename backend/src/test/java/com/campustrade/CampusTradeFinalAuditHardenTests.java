@@ -20,6 +20,8 @@ import com.campustrade.mapper.StudentVerifyMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.service.ReportService;
 import com.campustrade.support.TestCredentials;
+import com.campustrade.enums.GoodsStatus;
+import com.campustrade.enums.StudentVerifyStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.minio.MinioClient;
@@ -415,7 +417,7 @@ class CampusTradeFinalAuditHardenTests {
                     .description("举报限流并发测试商品")
                     .price(new BigDecimal("10.00"))
                     .conditionLevel("95新")
-                    .status("ON_SALE")
+                    .status(GoodsStatus.ON_SALE.getCode())
                     .viewCount(0)
                     .createdTime(LocalDateTime.now())
                     .updatedTime(LocalDateTime.now())
@@ -565,7 +567,7 @@ class CampusTradeFinalAuditHardenTests {
                 .schoolId(1L)
                 .studentNumber("S9A" + runId)
                 .schoolEmail(sharedEmail)
-                .verifyStatus("SUCCESS")
+                .verifyStatus(StudentVerifyStatus.SUCCESS.getCode())
                 .verifyTime(now)
                 .createdTime(now)
                 .build());
@@ -606,7 +608,7 @@ class CampusTradeFinalAuditHardenTests {
         // B 仍然没有被写成 SUCCESS
         Long bSuccess = studentVerifyMapper.selectCount(new LambdaQueryWrapper<StudentVerify>()
                 .eq(StudentVerify::getUserId, userBId)
-                .eq(StudentVerify::getVerifyStatus, "SUCCESS"));
+                .eq(StudentVerify::getVerifyStatus, StudentVerifyStatus.SUCCESS.getCode()));
         assertEquals(0L, bSuccess, "第二个账号绝不能核销成功");
 
         // 清理
@@ -634,7 +636,8 @@ class CampusTradeFinalAuditHardenTests {
                 "SELECT indexdef FROM pg_indexes WHERE schemaname='campus_trade' "
                         + "AND indexname='uk_student_verify_email_success'", String.class);
         assertTrue(indexDef.contains("UNIQUE"), indexDef);
-        assertTrue(indexDef.contains("SUCCESS"), "必须是 WHERE verify_status='SUCCESS' 的部分索引: " + indexDef);
+        assertTrue(indexDef.contains(StudentVerifyStatus.SUCCESS.getCode()),
+                "必须是 WHERE verify_status='SUCCESS' 的部分索引: " + indexDef);
 
         // 行为验证：第二条同 (school_id, school_email) 的 SUCCESS 行必须被数据库拒绝
         String runId = UUID.randomUUID().toString().substring(0, 8);
@@ -647,12 +650,12 @@ class CampusTradeFinalAuditHardenTests {
         LocalDateTime now = LocalDateTime.now();
         studentVerifyMapper.insert(StudentVerify.builder()
                 .userId(firstUser).schoolId(2L).studentNumber("DUP1" + runId)
-                .schoolEmail(email).verifyStatus("SUCCESS").verifyTime(now).createdTime(now).build());
+                .schoolEmail(email).verifyStatus(StudentVerifyStatus.SUCCESS.getCode()).verifyTime(now).createdTime(now).build());
 
         try {
             studentVerifyMapper.insert(StudentVerify.builder()
                     .userId(secondUser).schoolId(2L).studentNumber("DUP2" + runId)
-                    .schoolEmail(email).verifyStatus("SUCCESS").verifyTime(now).createdTime(now).build());
+                    .schoolEmail(email).verifyStatus(StudentVerifyStatus.SUCCESS.getCode()).verifyTime(now).createdTime(now).build());
             fail("第二条 SUCCESS 必须被部分唯一索引拒绝");
         } catch (org.springframework.dao.DataIntegrityViolationException expected) {
             assertTrue(String.valueOf(expected.getMessage()).contains("uk_student_verify_email_success")
@@ -667,13 +670,13 @@ class CampusTradeFinalAuditHardenTests {
         // PENDING 行不受限制（同一邮箱可以在多个账号上处于待核销状态）
         studentVerifyMapper.insert(StudentVerify.builder()
                 .userId(firstUser).schoolId(2L).studentNumber("P1" + runId)
-                .schoolEmail(email).verifyStatus("PENDING").createdTime(now).build());
+                .schoolEmail(email).verifyStatus(StudentVerifyStatus.PENDING.getCode()).createdTime(now).build());
         studentVerifyMapper.insert(StudentVerify.builder()
                 .userId(secondUser).schoolId(2L).studentNumber("P2" + runId)
-                .schoolEmail(email).verifyStatus("PENDING").createdTime(now).build());
+                .schoolEmail(email).verifyStatus(StudentVerifyStatus.PENDING.getCode()).createdTime(now).build());
         Long pending = studentVerifyMapper.selectCount(new LambdaQueryWrapper<StudentVerify>()
                 .eq(StudentVerify::getSchoolEmail, email)
-                .eq(StudentVerify::getVerifyStatus, "PENDING"));
+                .eq(StudentVerify::getVerifyStatus, StudentVerifyStatus.PENDING.getCode()));
         assertEquals(2L, pending, "PENDING 行必须允许重复（部分索引只约束 SUCCESS 行）");
         studentVerifyMapper.delete(new LambdaQueryWrapper<StudentVerify>()
                 .eq(StudentVerify::getSchoolEmail, email));

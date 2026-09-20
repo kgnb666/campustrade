@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
+import com.campustrade.enums.OrderStatus;
 
 /**
  * Stage 4-B-1: 订单系统数据库迁移基础建设测试套件
@@ -131,7 +132,7 @@ class CampusTradeStage4B1Tests {
                 .findFirst()
                 .orElse("");
 
-        assertTrue(partialIndexDef.contains("WHERE") && partialIndexDef.contains("WAIT_SELLER_CONFIRM") && partialIndexDef.contains("WAIT_MEET"),
+        assertTrue(partialIndexDef.contains("WHERE") && partialIndexDef.contains(OrderStatus.WAIT_SELLER_CONFIRM.getCode()) && partialIndexDef.contains(OrderStatus.WAIT_MEET.getCode()),
                 "uk_trade_order_active_goods 必须是基于活动状态的局部唯一索引");
     }
 

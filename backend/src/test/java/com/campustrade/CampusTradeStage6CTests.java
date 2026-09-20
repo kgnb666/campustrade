@@ -16,6 +16,7 @@ import com.campustrade.service.CreditService;
 import com.campustrade.service.ReviewService;
 import com.campustrade.vo.review.ReviewLikeVO;
 import com.campustrade.vo.review.ReviewVO;
+import com.campustrade.enums.GoodsStatus;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.flywaydb.core.Flyway;
@@ -181,7 +182,7 @@ class CampusTradeStage6CTests {
                 .price(new BigDecimal("199.00"))
                 .originalPrice(new BigDecimal("399.00"))
                 .conditionLevel("95新")
-                .status("ON_SALE")
+                .status(GoodsStatus.ON_SALE.getCode())
                 .viewCount(5)
                 .createdTime(LocalDateTime.now())
                 .updatedTime(LocalDateTime.now())
@@ -859,7 +860,7 @@ class CampusTradeStage6CTests {
                         .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value(200))
-                .andExpect(jsonPath("$.data.status").value("VISIBLE"));
+                .andExpect(jsonPath("$.data.status").value(ReviewStatus.VISIBLE.getCode()));
 
         // 4. 验证卖家信用精准恢复为 103 分
         UserCredit finalCredit = userCreditMapper.selectOne(new LambdaQueryWrapper<UserCredit>().eq(UserCredit::getUserId, sellerId));
@@ -872,8 +873,8 @@ class CampusTradeStage6CTests {
                         .eq(AdminAuditLog::getOperationType, AdminOperationType.RESTORE_REVIEW.getCode())
         );
         assertNotNull(audit, "必须生成 RESTORE_REVIEW 操作审计日志");
-        assertEquals("AUDIT_REJECTED", audit.getBeforeStatus());
-        assertEquals("VISIBLE", audit.getAfterStatus());
+        assertEquals(ReviewStatus.AUDIT_REJECTED.getCode(), audit.getBeforeStatus());
+        assertEquals(ReviewStatus.VISIBLE.getCode(), audit.getAfterStatus());
         assertEquals(ADMIN_USER_ID, audit.getAdminId());
     }
 

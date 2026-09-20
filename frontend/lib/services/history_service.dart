@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import '../api/dio_client.dart';
+import '../config/app_config.dart';
 import '../models/history_model.dart';
 import '../utils/api_error.dart';
 import '../utils/app_logger.dart';
@@ -12,21 +13,12 @@ import '../utils/json_cast.dart';
 class HistoryService {
   final Dio _dio = DioClient().dio;
 
-  String _serverMessage(Response<dynamic> response, String fallback) {
-    final dynamic data = response.data;
-    if (data is Map) {
-      final String message = (data['message'] ?? '').toString().trim();
-      if (message.isNotEmpty) return message;
-    }
-    return fallback;
-  }
-
   /// 分页获取我的浏览历史
   ///
   /// [cancelToken] 由控制器持有：刷新/离开页面时取消在途请求（见 [GoodsService] 的说明）。
   Future<Map<String, dynamic>> getHistoryList({
     int page = 1,
-    int size = 20,
+    int size = AppConfig.historyPageSize,
     CancelToken? cancelToken,
   }) async {
     try {
@@ -48,7 +40,7 @@ class HistoryService {
         };
       }
       throw ApiException(
-        _serverMessage(response, '浏览足迹加载失败'),
+        serverMessageOr(response, '浏览足迹加载失败'),
         statusCode: response.statusCode,
       );
     } catch (e) {

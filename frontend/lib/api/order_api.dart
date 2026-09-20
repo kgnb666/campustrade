@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import '../config/app_config.dart';
 import '../models/api_response.dart';
 import '../utils/api_error.dart';
 import '../models/order.dart';
@@ -51,7 +52,7 @@ class OrderApi {
     String role = 'BUYER',
     String? status,
     int page = 1,
-    int size = 10,
+    int size = AppConfig.orderPageSize,
     CancelToken? cancelToken,
   }) async {
     try {

@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import '../config/app_config.dart';
 import '../models/api_response.dart';
 import '../models/review.dart';
 import '../utils/app_logger.dart';
@@ -41,7 +42,7 @@ class ReviewApi {
   Future<ApiResponse<ReviewPageResult>> getReviewsByUser(
     String userId, {
     int page = 1,
-    int size = 10,
+    int size = AppConfig.reviewPageSize,
   }) async {
     try {
       final response = await _dio.get(
@@ -72,7 +73,7 @@ class ReviewApi {
   Future<ApiResponse<ReviewPageResult>> getReviewsByGoods(
     String goodsId, {
     int page = 1,
-    int size = 10,
+    int size = AppConfig.reviewPageSize,
   }) async {
     try {
       final response = await _dio.get(
