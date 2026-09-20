@@ -2,6 +2,7 @@ package com.campustrade.service.impl;
 
 import com.campustrade.common.constant.CreditRule;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.campustrade.common.ResultCode;
 import com.campustrade.dto.UpdateProfileDTO;
 import com.campustrade.entity.CampusSchool;
@@ -121,23 +122,28 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException(ResultCode.NOT_FOUND.getCode(), "用户不存在");
         }
 
+        // 定点更新：只写资料字段。
+        // 不能"读整行 → 改字段 → updateById"：MyBatis-Plus 默认会把实体上所有非空字段拼进 SET，
+        // 于是并发场景下会把管理员刚写入的 status=FROZEN 覆盖回 ACTIVE（冻结被静默撤销、审计与实际背离）。
+        LambdaUpdateWrapper<User> update = new LambdaUpdateWrapper<User>()
+                .eq(User::getId, user.getId())
+                .set(User::getUpdatedTime, LocalDateTime.now());
         boolean updated = false;
         if (StringUtils.hasText(dto.getNickname())) {
-            user.setNickname(dto.getNickname().trim());
+            update.set(User::getNickname, dto.getNickname().trim());
             updated = true;
         }
         if (StringUtils.hasText(dto.getAvatar())) {
-            user.setAvatar(dto.getAvatar().trim());
+            update.set(User::getAvatar, dto.getAvatar().trim());
             updated = true;
         }
         if (StringUtils.hasText(dto.getPhone())) {
-            user.setPhone(dto.getPhone().trim());
+            update.set(User::getPhone, dto.getPhone().trim());
             updated = true;
         }
 
         if (updated) {
-            user.setUpdatedTime(LocalDateTime.now());
-            userMapper.updateById(user);
+            userMapper.update(null, update);
             log.info("用户资料已更新: username={}, userId={}", username, user.getId());
         }
 

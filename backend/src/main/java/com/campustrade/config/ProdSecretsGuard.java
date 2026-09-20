@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 生产环境敏感配置的启动期守卫（fail-fast）。
@@ -120,6 +121,31 @@ public class ProdSecretsGuard implements EnvironmentPostProcessor, Ordered {
                             + "\n请为生产环境生成独立凭据后重新启动（例如 openssl rand -base64 24）。");
         }
 
+        // 已知的开发/示例口令：即使调用方给的是"非空、非 CHANGE_ME"的值，也必须拒绝。
+        // 背景：仓库根目录存在开发用 .env，而 docker compose 会默认读取它 ——
+        // 若生产直接用 `docker compose -f docker-compose.prod.yml up -d` 而未显式 --env-file，
+        // 开发口令（与本地库/缓存/对象存储一致）会被当成生产凭据使用。
+        List<String> knownDevValues = new ArrayList<>();
+        for (Map.Entry<String, String> required : REQUIRED_ENV_VARS.entrySet()) {
+            String name = required.getKey();
+            if (!name.contains("PASSWORD") && !name.contains("SECRET") && !name.contains("USER")) {
+                continue;
+            }
+            String value = environment.getProperty(name);
+            if (value != null && KNOWN_DEV_SECRET_VALUES.contains(value.trim().toLowerCase(Locale.ROOT))) {
+                knownDevValues.add(name);
+            }
+        }
+        if (!knownDevValues.isEmpty()) {
+            throw new IllegalStateException(
+                    "生产环境正在使用开发环境的已知口令：prod 拒绝启动。以下环境变量的值与仓库中的"
+                            + "开发配置（.env / .env.example 历史值 / docker-compose.yml 默认值）相同：\n  - "
+                            + String.join("\n  - ", knownDevValues)
+                            + "\n最常见的原因是直接执行了 docker compose -f docker-compose.prod.yml up -d "
+                            + "而没有指定 --env-file，compose 于是读取了仓库根的开发 .env。"
+                            + "\n请用 --env-file /etc/campustrade/prod.env 指定生产凭据后重新启动。");
+        }
+
         String corsOrigins = environment.getProperty("CORS_ALLOWED_ORIGINS", "");
         if (corsOrigins.contains("*")) {
             throw new IllegalStateException(
@@ -128,6 +154,19 @@ public class ProdSecretsGuard implements EnvironmentPostProcessor, Ordered {
                             + "请在 CORS_ALLOWED_ORIGINS 中列出真实域名，例如 https://app.example.com");
         }
     }
+
+    /**
+     * 仓库中已经出现过的开发凭据值（小写比较）。它们可以被公开检索到，因此等同于公开口令。
+     * 只做"拒绝"不做替换：生产凭据必须由部署平台生成。
+     */
+    private static final Set<String> KNOWN_DEV_SECRET_VALUES = Set.of(
+            "campustrade123",
+            "campustrade-secret",
+            "campustrade-test",
+            "password",
+            "123456",
+            "admin"
+    );
 
     /** 占位符判定：CHANGE_ME_* / CHANGE_ME-* 等一律视为"未填写"。 */
     private static boolean isPlaceholder(String value) {

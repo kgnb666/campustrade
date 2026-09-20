@@ -48,6 +48,9 @@ class OrderController extends GetxController {
   /// 列表请求序号：用于作废在途的旧响应
   int _listRequestSeq = 0;
 
+  /// 详情请求序号：控制器跨页面共享，切换订单时需作废旧详情响应（否则会出现"串单"）
+  int _detailRequestSeq = 0;
+
   /// 控制器是否已关闭（关闭后丢弃迟到响应）
   bool _closed = false;
 
@@ -58,6 +61,8 @@ class OrderController extends GetxController {
   }
 
   bool _isStale(int requestId) => _closed || requestId != _listRequestSeq;
+
+  bool _isStaleDetail(int requestId) => _closed || requestId != _detailRequestSeq;
 
   /// 是否存在错误
   bool get hasError => errorMessage.isNotEmpty;
@@ -154,12 +159,16 @@ class OrderController extends GetxController {
 
   /// 查询特定订单详情
   Future<OrderVO?> fetchOrderDetail(String id) async {
+    // 详情请求同样需要请求序号：controller 是跨页面共享的（我的订单 / 订单详情 / 商品详情都要用它），
+    // 从订单 A 进详情后立刻返回再进订单 B 时，A 的迟到响应会把 currentOrder 覆盖成 A 的数据（"串单"），
+    // 而页面紧接着还会读共享的 currentOrder 去拉评价状态，于是拿到的是错误订单的评价状态。
+    final int detailId = ++_detailRequestSeq;
     loading.value = true;
     resetError();
 
     try {
       final res = await _orderApi.getOrderDetail(id);
-      if (_closed) return null; // 控制器已关闭：丢弃迟到响应
+      if (_closed || _isStaleDetail(detailId)) return null; // 控制器已关闭或已有更新的详情请求：丢弃
       if (res.isSuccess && res.data != null) {
         currentOrder.value = res.data;
         _syncOrderInList(res.data!);
@@ -170,10 +179,13 @@ class OrderController extends GetxController {
       }
     } catch (e, stack) {
       debugPrint('[OrderController] fetchOrderDetail error: $e\n$stack');
+      if (_closed || _isStaleDetail(detailId)) return null;
       errorMessage.value = describeApiError(e, fallback: '获取订单详情失败');
       return null;
     } finally {
-      loading.value = false;
+      if (!_closed && !_isStaleDetail(detailId)) {
+        loading.value = false;
+      }
     }
   }
 
