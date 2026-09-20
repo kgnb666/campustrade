@@ -28,6 +28,27 @@ public class DeepSeekClient {
     private final ObjectMapper objectMapper;
 
     /**
+     * 占位符前缀：与 {@code .env.example} 和 {@code ProdSecretsGuard} 使用同一套"未填写"判定规则
+     * （{@code CHANGE_ME_*}）。
+     */
+    private static final String PLACEHOLDER_PREFIX = "change_me";
+
+    /**
+     * 历史占位符字面量（曾是 application.yml 的默认值）。它从来没有指向过任何真实服务，
+     * 但仍要继续被拒绝：若有人把它当成真实 Key 配置进来，必须走降级而不是真的发出请求。
+     * 配置默认值现已改为 {@code CHANGE_ME_deepseek_api_key}（见 application.yml）。
+     */
+    private static final String LEGACY_PLACEHOLDER = "your_deepseek_api_key_here";
+
+    /**
+     * 判断配置里的 Key 是否是"没填"的占位符。
+     */
+    private static boolean isPlaceholder(String apiKey) {
+        String normalized = apiKey.trim().toLowerCase();
+        return normalized.startsWith(PLACEHOLDER_PREFIX) || normalized.equals(LEGACY_PLACEHOLDER);
+    }
+
+    /**
      * 发起对话补全请求并返回模型回复文本
      *
      * @param systemPrompt 系统提示词
@@ -41,8 +62,8 @@ public class DeepSeekClient {
         String model = deepSeekProperties.getModel();
         int timeout = deepSeekProperties.getTimeout() != null ? deepSeekProperties.getTimeout() : 15000;
 
-        if (!StringUtils.hasText(apiKey) || "your_deepseek_api_key_here".equalsIgnoreCase(apiKey.trim())) {
-            log.warn("DeepSeek API Key 未配置或为默认占位符，触发优雅降级");
+        if (!StringUtils.hasText(apiKey) || isPlaceholder(apiKey)) {
+            log.warn("DeepSeek API Key 未配置或为占位符（CHANGE_ME_* / 历史默认值），触发优雅降级");
             throw new IllegalStateException("DeepSeek API Key 未有效配置");
         }
 

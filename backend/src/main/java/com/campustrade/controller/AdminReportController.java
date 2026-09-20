@@ -3,6 +3,7 @@ package com.campustrade.controller;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.campustrade.common.Result;
 import com.campustrade.common.annotation.CurrentUser;
+import com.campustrade.common.util.ClientIpUtils;
 import com.campustrade.dto.report.HandleReportRequest;
 import com.campustrade.dto.report.ReportQueryRequest;
 import com.campustrade.dto.review.RestoreReviewRequest;
@@ -16,7 +17,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -31,6 +31,13 @@ import org.springframework.web.bind.annotation.*;
 public class AdminReportController {
 
     private final AdminGovernanceService adminGovernanceService;
+
+    /**
+     * 来源 IP 解析统一走 {@link ClientIpUtils}（配置驱动：只有 remoteAddr 属于
+     * {@code security.trusted-proxies} 时才采信 X-Forwarded-For / X-Real-IP）。
+     * 审计流水的 ip_address 列此前无条件相信客户端头部，可被伪造成任意地址。
+     */
+    private final ClientIpUtils clientIpUtils;
 
     /**
      * 分页查询平台举报工单列表
@@ -111,19 +118,6 @@ public class AdminReportController {
     }
 
     private String getClientIp(HttpServletRequest request) {
-        if (request == null) {
-            return "127.0.0.1";
-        }
-        String ip = request.getHeader("X-Forwarded-For");
-        if (!StringUtils.hasText(ip) || "unknown".equalsIgnoreCase(ip)) {
-            ip = request.getHeader("X-Real-IP");
-        }
-        if (!StringUtils.hasText(ip) || "unknown".equalsIgnoreCase(ip)) {
-            ip = request.getRemoteAddr();
-        }
-        if (StringUtils.hasText(ip) && ip.contains(",")) {
-            ip = ip.split(",")[0].trim();
-        }
-        return ip;
+        return clientIpUtils.resolve(request);
     }
 }

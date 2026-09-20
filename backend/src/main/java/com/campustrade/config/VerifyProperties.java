@@ -58,11 +58,16 @@ public class VerifyProperties {
     /** 同一验证码允许的最大核验失败次数，达到即作废，必须重新获取 */
     private int maxFailures = 5;
 
-    /** 同一校园邮箱在 email-send-window-hours 窗口内允许的最大发送次数 */
-    private int sendLimitPerEmail = 5;
+    /**
+     * 同一发起人对同一校园邮箱在 {@code userEmailSendWindowHours} 窗口内允许的最大发送次数。
+     *
+     * <p>维度是"发起人 × 邮箱"而不是"仅邮箱"：只按邮箱计数时，任意登录用户都能把他人邮箱的
+     * 当日额度打满，使被攻击者当天无法完成认证，同时给对方持续投递垃圾验证码邮件。</p>
+     */
+    private int sendLimitPerUserEmail = 3;
 
-    /** 上述"按邮箱"计数的时间窗口（小时） */
-    private int emailSendWindowHours = 24;
+    /** 上述"发起人 × 邮箱"计数的时间窗口（小时） */
+    private int userEmailSendWindowHours = 24;
 
     /** 同一用户在同一窗口内允许的最大发送次数 */
     private int sendLimitPerUser = 3;

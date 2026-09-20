@@ -148,6 +148,11 @@ class CampusTradeStage6BTests {
         } else {
             u.setRole(role);
             u.setStatus("ACTIVE");
+            // 令牌的 subject 是用户名，而 JwtAuthenticationFilter 以"令牌 subject"从数据库加载用户，
+            // 因此这里必须保证库内的用户名与本测试类签发的令牌一致：若该 id 已被其他测试类
+            // 以别的用户名建过（同一 id 的夹具冲突），先把它改回本类期望的用户名，否则请求会 401。
+            u.setUsername(username);
+            u.setNickname(nickname);
             userMapper.updateById(u);
         }
 

@@ -6,6 +6,7 @@ import com.campustrade.entity.UserCreditLog;
 import com.campustrade.enums.CreditChangeType;
 import com.campustrade.enums.CreditLevel;
 import com.campustrade.mapper.UserCreditLogMapper;
+import com.campustrade.mapper.UserMapper;
 import com.campustrade.mapper.UserCreditMapper;
 import com.campustrade.service.CreditService;
 import org.flywaydb.core.Flyway;
@@ -25,6 +26,7 @@ import org.springframework.transaction.support.DefaultTransactionDefinition;
 
 import java.time.LocalDateTime;
 import java.util.Arrays;
+import java.util.UUID;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -54,6 +56,9 @@ class CampusTradeStage5BTests {
     private Flyway flyway;
 
     @Autowired
+    private UserMapper userMapper;
+
+    @Autowired
     private JdbcTemplate jdbcTemplate;
 
     @Autowired
@@ -69,6 +74,33 @@ class CampusTradeStage5BTests {
     private PlatformTransactionManager transactionManager;
 
     private static final long TEST_USER_ID = 88880001L;
+
+    /**
+     * 夹具用户（信用域用例直接以固定 ID 调用信用服务）。
+     *
+     * <p>V12 起 {@code user_credit.user_id} 有外键（NOT VALID 只豁免历史行，新行照样校验），
+     * 因此这些"被引用行"必须真实存在：一个信用档案不可能属于一个不存在的用户。</p>
+     */
+    private static final long[] FIXTURE_USER_IDS = {88880001L, 88880002L, 88880003L, 88880004L};
+
+    @org.junit.jupiter.api.BeforeEach
+    void ensureFixtureUsers() {
+        for (long id : FIXTURE_USER_IDS) {
+            if (userMapper.selectById(id) == null) {
+                LocalDateTime now = LocalDateTime.now();
+                userMapper.insert(com.campustrade.entity.User.builder()
+                        .id(id)
+                        .username("stage5b_fixture_" + id)
+                        .password(UUID.randomUUID().toString())
+                        .nickname("信用夹具用户 " + id)
+                        .role("USER")
+                        .status("ACTIVE")
+                        .createdTime(now)
+                        .updatedTime(now)
+                        .build());
+            }
+        }
+    }
 
     @Test
     @Order(1)

@@ -1,6 +1,7 @@
 package com.campustrade.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.campustrade.common.ResultCode;
 import com.campustrade.common.constant.RedisKeyConstants;
 import com.campustrade.config.VerifyProperties;
@@ -17,6 +18,7 @@ import com.campustrade.service.StudentVerifyService;
 import com.campustrade.service.mail.VerifyCodeMailSender;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,8 +40,14 @@ import java.util.concurrent.TimeUnit;
  *       的实参原样打印进日志文件，因此验证码只存 Redis，绝不写入 {@code student_verify.verify_code}；</li>
  *   <li><b>可试错次数有限</b>：同一验证码核验失败累计 5 次即作废，必须重新获取，
  *       把 6 位验证码从"可无限枚举"收敛为"最多 5 次机会"；</li>
- *   <li><b>发送次数受限</b>：按邮箱（24 小时 5 次）与按用户（10 分钟 3 次）双向限流，
- *       既防"拿一个邮箱反复轰炸"，也防"换邮箱刷同一账号"；</li>
+ *   <li><b>发送次数按"发起人 × 邮箱"限流</b>：同一发起人对同一校园邮箱 24 小时 3 次、
+ *       同一发起人 10 分钟 3 次。维度必须是"发起人 × 邮箱"而不是"仅邮箱"，否则任意账号都能把
+ *       他人邮箱的当日额度打满（被攻击者当天无法认证，还会持续收到垃圾验证码邮件）；</li>
+ *   <li><b>核验失败计数同为"发起人 × 邮箱"</b>：否则攻击者可以对他人邮箱连输 5 次错误验证码，
+ *       把对方正在使用的验证码作废；</li>
+ *   <li><b>邮箱唯一性</b>：{@code student_verify(school_id, school_email)} 上有一条
+ *       {@code WHERE verify_status='SUCCESS'} 的部分唯一索引（V12），核销前再做一次应用层校验，
+ *       保证"一个校园邮箱只绑定一个账号"；</li>
  *   <li><b>认证状态边界不变</b>：{@code verifyStatus=SUCCESS} 仍然只由"验证码核销成功"这一条路径写入。</li>
  * </ul>
  */
@@ -47,6 +55,9 @@ import java.util.concurrent.TimeUnit;
 @Service
 @RequiredArgsConstructor
 public class StudentVerifyServiceImpl implements StudentVerifyService {
+
+    private static final String STATUS_PENDING = "PENDING";
+    private static final String STATUS_SUCCESS = "SUCCESS";
 
     private final UserMapper userMapper;
     private final CampusSchoolMapper campusSchoolMapper;
@@ -82,7 +93,7 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
             );
         }
 
-        // 4. 发送频率限制：按邮箱（24h/5 次）与按用户（10min/3 次）双向限流，超限直接拒绝
+        // 4. 发送频率限制：按用户（10min/3 次）与"发起人 × 邮箱"（24h/3 次）双向限流，超限直接拒绝
         enforceSendLimits(user.getId(), email);
 
         // 5. 生成 6 位随机数字验证码并写入 Redis (TTL: 5 分钟)
@@ -92,7 +103,7 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
         stringRedisTemplate.opsForValue().set(redisKey, verifyCode, codeTtlMinutes, TimeUnit.MINUTES);
 
         // 新验证码生效即重置旧的失败计数：上一次"输错 4 次"不应消耗新验证码的试错机会
-        stringRedisTemplate.delete(RedisKeyConstants.studentVerifyFailKey(email));
+        stringRedisTemplate.delete(RedisKeyConstants.studentVerifyFailKey(user.getId(), email));
 
         // 6. 保存或更新学生认证记录为 PENDING 状态
         //    注意：刻意不写入 verify_code —— 该字段是验证码明文，而 MyBatis 参数日志会把 SQL 实参打进日志文件，
@@ -105,19 +116,29 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
         );
 
         LocalDateTime now = LocalDateTime.now();
-        if (existingVerify != null && !"SUCCESS".equalsIgnoreCase(existingVerify.getVerifyStatus())) {
-            existingVerify.setSchoolId(school.getId());
-            existingVerify.setStudentNumber(dto.getStudentNumber().trim());
-            existingVerify.setSchoolEmail(email);
-            existingVerify.setVerifyStatus("PENDING");
-            studentVerifyMapper.updateById(existingVerify);
+        if (existingVerify != null && !STATUS_SUCCESS.equalsIgnoreCase(existingVerify.getVerifyStatus())) {
+            // 定点更新 + 前置条件：只改写四个业务字段，并把"不是 SUCCESS"作为 WHERE 条件。
+            // 原实现用 updateById(整行回写)：并发下会把同一行的其它字段（例如刚刚核销写入的
+            // verify_status / verify_time）用旧快照覆盖回去（本人自伤）。
+            int updated = studentVerifyMapper.update(null, new LambdaUpdateWrapper<StudentVerify>()
+                    .set(StudentVerify::getSchoolId, school.getId())
+                    .set(StudentVerify::getStudentNumber, dto.getStudentNumber().trim())
+                    .set(StudentVerify::getSchoolEmail, email)
+                    .set(StudentVerify::getVerifyStatus, STATUS_PENDING)
+                    .eq(StudentVerify::getId, existingVerify.getId())
+                    .ne(StudentVerify::getVerifyStatus, STATUS_SUCCESS));
+            if (updated != 1) {
+                log.info("认证申请行状态已变更，跳过 PENDING 改写: userId={}, verifyId={}, updated={}",
+                        user.getId(), existingVerify.getId(), updated);
+                throw new BusinessException(409, "认证状态已变更，请刷新后重新提交认证");
+            }
         } else if (existingVerify == null) {
             StudentVerify newVerify = StudentVerify.builder()
                     .userId(user.getId())
                     .schoolId(school.getId())
                     .studentNumber(dto.getStudentNumber().trim())
                     .schoolEmail(email)
-                    .verifyStatus("PENDING")
+                    .verifyStatus(STATUS_PENDING)
                     .createdTime(now)
                     .build();
             studentVerifyMapper.insert(newVerify);
@@ -150,7 +171,7 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
 
         String email = dto.getSchoolEmail().trim().toLowerCase();
         String redisKey = RedisKeyConstants.studentVerifyKey(email);
-        String failKey = RedisKeyConstants.studentVerifyFailKey(email);
+        String failKey = RedisKeyConstants.studentVerifyFailKey(user.getId(), email);
         String cachedCode = stringRedisTemplate.opsForValue().get(redisKey);
 
         if (cachedCode == null) {
@@ -159,7 +180,7 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
 
         if (!cachedCode.equals(dto.getVerifyCode().trim())) {
             // 失败计数：累计达到上限即作废验证码（内部直接抛出 429 业务错误）
-            recordVerifyFailure(email, redisKey, failKey);
+            recordVerifyFailure(user.getId(), email, redisKey, failKey);
             throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "验证码错误，请重新输入");
         }
 
@@ -177,10 +198,46 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
             throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "未找到对应的认证申请记录，请重新提交认证");
         }
 
+        // 应用层唯一性校验：同一校园邮箱只能被一个账号核销成功。
+        // 数据库侧由 V12 的部分唯一索引 uk_student_verify_email_success 兜底（并发下最终一致）。
+        Long verifiedByOthers = studentVerifyMapper.selectCount(
+                new LambdaQueryWrapper<StudentVerify>()
+                        .eq(StudentVerify::getSchoolId, verifyRecord.getSchoolId())
+                        .eq(StudentVerify::getSchoolEmail, email)
+                        .eq(StudentVerify::getVerifyStatus, STATUS_SUCCESS)
+                        .ne(StudentVerify::getUserId, user.getId())
+        );
+        if (verifiedByOthers != null && verifiedByOthers > 0) {
+            log.warn("校园邮箱已被其他账号认证，拒绝重复核销: email={}, userId={}, schoolId={}",
+                    VerifyCodeMailSender.maskEmail(email), user.getId(), verifyRecord.getSchoolId());
+            throw new BusinessException(409, "该校园邮箱已被其他账号完成认证，一个校园邮箱只能绑定一个账号；如有疑问请联系平台管理员");
+        }
+
         LocalDateTime now = LocalDateTime.now();
-        verifyRecord.setVerifyStatus("SUCCESS");
-        verifyRecord.setVerifyTime(now);
-        studentVerifyMapper.updateById(verifyRecord);
+        int updated;
+        try {
+            // 定点更新 + 前置条件：只把"仍是 PENDING 的那一行"改为 SUCCESS，并校验受影响行数。
+            // 整行回写在并发下会互相覆盖（本人自伤）；条件更新让"谁先核销谁生效"具备确定性。
+            updated = studentVerifyMapper.update(null, new LambdaUpdateWrapper<StudentVerify>()
+                    .set(StudentVerify::getVerifyStatus, STATUS_SUCCESS)
+                    .set(StudentVerify::getVerifyTime, now)
+                    .eq(StudentVerify::getId, verifyRecord.getId())
+                    .eq(StudentVerify::getVerifyStatus, STATUS_PENDING));
+        } catch (DuplicateKeyException e) {
+            // 并发下另一账号抢先核销了同一邮箱：数据库部分唯一索引兜底拦截
+            log.warn("并发核销命中校园邮箱唯一索引: email={}, userId={}",
+                    VerifyCodeMailSender.maskEmail(email), user.getId());
+            throw new BusinessException(409, "该校园邮箱已被其他账号完成认证，一个校园邮箱只能绑定一个账号；如有疑问请联系平台管理员");
+        }
+
+        if (updated != 1) {
+            log.warn("认证核销未生效（行状态已变更或不存在）: userId={}, verifyId={}, updated={}",
+                    user.getId(), verifyRecord.getId(), updated);
+            if (STATUS_SUCCESS.equalsIgnoreCase(verifyRecord.getVerifyStatus())) {
+                throw new BusinessException(409, "该校园邮箱已完成认证，无需重复核销");
+            }
+            throw new BusinessException(409, "认证申请状态已变更，请重新提交认证");
+        }
 
         // 核销后清理 Redis 中的验证码与失败计数
         stringRedisTemplate.delete(redisKey);
@@ -194,24 +251,26 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
     // =========================================================================
 
     /**
-     * 发送频率限制：按校园邮箱与按用户两个维度计数，任一超限即拒绝（429 语义）。
+     * 发送频率限制：按"发起人 × 邮箱"与按用户两个维度计数，任一超限即拒绝（429 语义）。
      *
-     * <p>先邮箱后用户：同一邮箱被反复轰炸时优先给出"该邮箱已达上限"，避免多账号轮番请求同一邮箱。</p>
+     * <p>先用户后邮箱：同一账号用不同邮箱轮番轰炸时优先给出"请求过于频繁"，
+     * 再由"发起人 × 邮箱"的 24 小时配额收敛跨窗口的重复请求。</p>
      */
     private void enforceSendLimits(Long userId, String email) {
-        enforceLimit(
-                "email", VerifyCodeMailSender.maskEmail(email),
-                RedisKeyConstants.studentVerifySendEmailKey(email),
-                verifyProperties.getEmailSendWindowHours(), TimeUnit.HOURS,
-                verifyProperties.getSendLimitPerEmail(),
-                "该校园邮箱 24 小时内验证码发送次数已达上限，请稍后再试"
-        );
         enforceLimit(
                 "user", "userId=" + userId,
                 RedisKeyConstants.studentVerifySendUserKey(userId),
                 verifyProperties.getUserSendWindowMinutes(), TimeUnit.MINUTES,
                 verifyProperties.getSendLimitPerUser(),
                 "验证码请求过于频繁，请 " + verifyProperties.getUserSendWindowMinutes() + " 分钟后再试"
+        );
+        enforceLimit(
+                "user-email", "userId=" + userId + ", email=" + VerifyCodeMailSender.maskEmail(email),
+                RedisKeyConstants.studentVerifySendUserEmailKey(userId, email),
+                verifyProperties.getUserEmailSendWindowHours(), TimeUnit.HOURS,
+                verifyProperties.getSendLimitPerUserEmail(),
+                "同一校园邮箱 24 小时内最多可获取 " + verifyProperties.getSendLimitPerUserEmail()
+                        + " 次验证码，请稍后再试（换账号请求他人邮箱同样受限）"
         );
     }
 
@@ -237,18 +296,21 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
     /**
      * 记录一次验证码核验失败；累计达到上限即作废当前验证码并抛出 429 业务错误。
      *
+     * <p>计数维度为（发起人 userId × 目标邮箱）：只按邮箱计数时，攻击者可以对他人邮箱
+     * 连输 5 次错误验证码，把对方正在使用的验证码恶意作废。</p>
+     *
      * <p>作废方式为直接删除 Redis 中的验证码：此后即使提交正确的验证码也会得到
      * "验证码已过期或未获取"，必须重新发送（重新发送会重置本计数）。</p>
      */
-    private void recordVerifyFailure(String email, String redisKey, String failKey) {
+    private void recordVerifyFailure(Long userId, String email, String redisKey, String failKey) {
         Long failures = stringRedisTemplate.opsForValue().increment(failKey);
         stringRedisTemplate.expire(failKey, verifyProperties.getCodeTtlMinutes(), TimeUnit.MINUTES);
 
         int maxFailures = verifyProperties.getMaxFailures();
         if (failures != null && failures >= maxFailures) {
             stringRedisTemplate.delete(redisKey);
-            log.warn("校园认证验证码核验失败次数达到上限，验证码已作废: email={}, failures={}, maxFailures={}",
-                    VerifyCodeMailSender.maskEmail(email), failures, maxFailures);
+            log.warn("校园认证验证码核验失败次数达到上限，验证码已作废: userId={}, email={}, failures={}, maxFailures={}",
+                    userId, VerifyCodeMailSender.maskEmail(email), failures, maxFailures);
             throw new BusinessException(429, "验证码错误次数过多，本次验证码已失效，请重新获取验证码");
         }
     }

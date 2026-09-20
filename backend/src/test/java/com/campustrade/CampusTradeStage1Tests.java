@@ -215,17 +215,18 @@ class CampusTradeStage1Tests {
         assertNotNull(codeExpire);
         assertTrue(codeExpire > 0 && codeExpire <= 300, "验证码 TTL 应为 5 分钟 (<=300s)");
 
-        // 3. 双向限流计数与 TTL：邮箱维度 24 小时、用户维度 10 分钟
-        String emailLimitKey = RedisKeyConstants.studentVerifySendEmailKey(SCHOOL_EMAIL);
-        String userLimitKey = RedisKeyConstants.studentVerifySendUserKey(
-                userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, TEST_USERNAME)).getId());
+        // 3. 双向限流计数与 TTL：发起人×邮箱维度 24 小时、用户维度 10 分钟
+        Long currentUserId = userMapper.selectOne(
+                new LambdaQueryWrapper<User>().eq(User::getUsername, TEST_USERNAME)).getId();
+        String userEmailLimitKey = RedisKeyConstants.studentVerifySendUserEmailKey(currentUserId, SCHOOL_EMAIL);
+        String userLimitKey = RedisKeyConstants.studentVerifySendUserKey(currentUserId);
 
-        assertEquals("1", stringRedisTemplate.opsForValue().get(emailLimitKey),
-                "首次下发后邮箱维度计数应为 1");
-        Long emailLimitTtl = stringRedisTemplate.getExpire(emailLimitKey, TimeUnit.SECONDS);
+        assertEquals("1", stringRedisTemplate.opsForValue().get(userEmailLimitKey),
+                "首次下发后（发起人×邮箱）维度计数应为 1");
+        Long emailLimitTtl = stringRedisTemplate.getExpire(userEmailLimitKey, TimeUnit.SECONDS);
         assertNotNull(emailLimitTtl);
         assertTrue(emailLimitTtl > 23 * 3600 && emailLimitTtl <= 24 * 3600,
-                "邮箱维度限流窗口应为 24 小时，实际 TTL=" + emailLimitTtl);
+                "（发起人×邮箱）维度限流窗口应为 24 小时，实际 TTL=" + emailLimitTtl);
 
         assertEquals("1", stringRedisTemplate.opsForValue().get(userLimitKey),
                 "首次下发后用户维度计数应为 1");
@@ -236,7 +237,8 @@ class CampusTradeStage1Tests {
 
         // 新验证码下发后不应残留旧的失败计数
         assertFalse(Boolean.TRUE.equals(stringRedisTemplate.hasKey(
-                RedisKeyConstants.studentVerifyFailKey(SCHOOL_EMAIL))), "下发新验证码时必须重置失败计数");
+                RedisKeyConstants.studentVerifyFailKey(currentUserId, SCHOOL_EMAIL))),
+                "下发新验证码时必须重置失败计数");
 
         // 4. 邮件通道策略（不发真实邮件，只验证通道选择与失败行为）
         assertMailChannelPolicy();
@@ -244,11 +246,13 @@ class CampusTradeStage1Tests {
 
     @Test
     @Order(8)
-    @DisplayName("8. 验证码核销、5 次失败即作废、重发恢复与邮箱/用户双向限流")
+    @DisplayName("8. 验证码核销、5 次失败即作废、重发恢复与（发起人×邮箱）/用户双向限流")
     void test8_StudentVerifyCodeSuccessAndLockout() throws Exception {
+        Long userId = userMapper.selectOne(
+                new LambdaQueryWrapper<User>().eq(User::getUsername, TEST_USERNAME)).getId();
         String codeKey = RedisKeyConstants.studentVerifyKey(SCHOOL_EMAIL);
-        String failKey = RedisKeyConstants.studentVerifyFailKey(SCHOOL_EMAIL);
-        String emailLimitKey = RedisKeyConstants.studentVerifySendEmailKey(SCHOOL_EMAIL);
+        String failKey = RedisKeyConstants.studentVerifyFailKey(userId, SCHOOL_EMAIL);
+        String userEmailLimitKey = RedisKeyConstants.studentVerifySendUserEmailKey(userId, SCHOOL_EMAIL);
 
         String originalCode = stringRedisTemplate.opsForValue().get(codeKey);
         assertNotNull(originalCode, "前置用例应已下发验证码");
@@ -347,30 +351,61 @@ class CampusTradeStage1Tests {
         submitVerifyExpectSuccess(userAccessToken, SCHOOL_EMAIL);
         MvcResult userLimited = submitVerify(userAccessToken, SCHOOL_EMAIL);
         assertRateLimited(userLimited, "验证码请求过于频繁");
-        String userLimitKey = RedisKeyConstants.studentVerifySendUserKey(user.getId());
+        String userLimitKey = RedisKeyConstants.studentVerifySendUserKey(userId);
         assertEquals("4", stringRedisTemplate.opsForValue().get(userLimitKey));
         Long userLimitTtl = stringRedisTemplate.getExpire(userLimitKey, TimeUnit.SECONDS);
         assertNotNull(userLimitTtl);
         assertTrue(userLimitTtl > 9 * 60 && userLimitTtl <= 10 * 60,
                 "用户维度限流窗口应为 10 分钟，实际 TTL=" + userLimitTtl);
 
-        // 6. 邮箱维度限流：换一个新账号继续请求同一校园邮箱，第 6 次请求被拒绝
-        //    （邮箱维度必须独立计数，否则"换账号刷同一邮箱"即可绕过）
+        System.out.printf("[学生认证限流] 用户维度超限响应: %s%n",
+                userLimited.getResponse().getContentAsString(StandardCharsets.UTF_8));
+
+        // 6. 维度修正验证一：换一个新账号继续请求同一校园邮箱 —— 必须放行。
+        //    这正是本次修复的攻击面：旧实现"只按邮箱计数"，任意账号都能把他人邮箱的当日额度打满，
+        //    让被攻击者当天无法完成认证，同时给对方持续投递垃圾验证码邮件。
+        //    新维度是"发起人 userId × 目标邮箱"，因此对方账号的配额与本人互不影响。
         String otherUsername = "stage1_other_" + UUID.randomUUID().toString().substring(0, 8);
         String otherToken = registerAndLogin(otherUsername, TestCredentials.randomPassword(),
                 otherUsername + "@test.edu.cn");
-
-        // 第 5 次请求仍在 24 小时配额内
         submitVerifyExpectSuccess(otherToken, SCHOOL_EMAIL);
+        Long otherUserId = userMapper.selectOne(
+                new LambdaQueryWrapper<User>().eq(User::getUsername, otherUsername)).getId();
+        assertEquals("1", stringRedisTemplate.opsForValue().get(
+                        RedisKeyConstants.studentVerifySendUserEmailKey(otherUserId, SCHOOL_EMAIL)),
+                "其他账号对同一校园邮箱的计数必须独立：首次下发后自己的计数为 1");
 
-        // 第 6 次请求超出配额
-        MvcResult emailLimited = submitVerify(otherToken, SCHOOL_EMAIL);
-        assertRateLimited(emailLimited, "24 小时");
-        assertEquals("6", stringRedisTemplate.opsForValue().get(emailLimitKey));
-        Long emailLimitTtl = stringRedisTemplate.getExpire(emailLimitKey, TimeUnit.SECONDS);
-        assertNotNull(emailLimitTtl);
-        assertTrue(emailLimitTtl > 23 * 3600 && emailLimitTtl <= 24 * 3600,
-                "邮箱维度限流窗口应为 24 小时，实际 TTL=" + emailLimitTtl);
+        // 6.1 核验失败计数同样是"发起人 × 邮箱"：他人输错验证码不会消耗本人的作废次数
+        StudentVerifyCodeDTO otherCodeDTO = new StudentVerifyCodeDTO();
+        otherCodeDTO.setSchoolEmail(SCHOOL_EMAIL);
+        otherCodeDTO.setVerifyCode(wrongCodeOf(requireCachedCode(codeKey)));
+        mockMvc.perform(post("/student/verify/code")
+                        .header("Authorization", "Bearer " + otherToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(otherCodeDTO)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("验证码错误，请重新输入"));
+        assertEquals("1", stringRedisTemplate.opsForValue().get(
+                        RedisKeyConstants.studentVerifyFailKey(otherUserId, SCHOOL_EMAIL)),
+                "失败计数必须落在（其他账号 × 该邮箱）键上");
+        assertFalse(Boolean.TRUE.equals(stringRedisTemplate.hasKey(failKey)),
+                "他人输错验证码绝不能消耗本人（userId×邮箱）的失败次数");
+
+        // 7. 维度修正验证二：本人清空 10 分钟窗口后继续请求同一邮箱 —— 24 小时配额仍然拦住
+        stringRedisTemplate.delete(userLimitKey);
+        assertEquals("3", stringRedisTemplate.opsForValue().get(userEmailLimitKey),
+                "本人此前已对该邮箱占用 3 次 24 小时配额");
+        MvcResult userEmailLimited = submitVerify(userAccessToken, SCHOOL_EMAIL);
+        System.out.printf("[学生认证限流] 发起人×邮箱维度超限响应: %s（键 %s=%s）%n",
+                userEmailLimited.getResponse().getContentAsString(StandardCharsets.UTF_8),
+                userEmailLimitKey, stringRedisTemplate.opsForValue().get(userEmailLimitKey));
+        assertRateLimited(userEmailLimited, "24 小时");
+        assertEquals("4", stringRedisTemplate.opsForValue().get(userEmailLimitKey),
+                "被拒请求同样计入 24 小时窗口（限流窗口内请求不会因为被拒而免费）");
+        Long userEmailLimitTtl = stringRedisTemplate.getExpire(userEmailLimitKey, TimeUnit.SECONDS);
+        assertNotNull(userEmailLimitTtl);
+        assertTrue(userEmailLimitTtl > 23 * 3600 && userEmailLimitTtl <= 24 * 3600,
+                "（发起人×邮箱）维度限流窗口应为 24 小时，实际 TTL=" + userEmailLimitTtl);
     }
 
     // =========================================================================

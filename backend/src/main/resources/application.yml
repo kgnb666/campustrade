@@ -40,6 +40,16 @@ spring:
       port: ${SPRING_DATA_REDIS_PORT:6379}
       password: ${SPRING_DATA_REDIS_PASSWORD:}
       timeout: 5000ms
+      # Lettuce 连接池（依赖 org.apache.commons:commons-pool2，已在 pom 中显式引入）
+      # 不引入 commons-pool2 时这里的 lettuce.pool.* 会被 Spring Boot 静默忽略
+      # （表现为"配置看起来生效、实际仍共用单条连接"），因此依赖与配置必须成对出现。
+      lettuce:
+        pool:
+          max-active: ${SPRING_DATA_REDIS_POOL_MAX_ACTIVE:16}    # 最大连接数
+          max-idle: ${SPRING_DATA_REDIS_POOL_MAX_IDLE:8}         # 最大空闲连接
+          min-idle: ${SPRING_DATA_REDIS_POOL_MIN_IDLE:2}         # 最小空闲连接（预热，避免突发时现建连）
+          max-wait: ${SPRING_DATA_REDIS_POOL_MAX_WAIT:2000ms}    # 取连接最长等待，超时快速失败
+          time-between-eviction-runs: 30s                        # 空闲连接回收扫描间隔
 
   # 文件上传限制
   servlet:
@@ -72,6 +82,23 @@ security:
     lock-minutes: ${SECURITY_LOGIN_LOCK_MINUTES:15}      # 触发上限后的锁定窗口（分钟）
   register:
     ip-limit-per-hour: ${SECURITY_REGISTER_IP_LIMIT:20}  # 单一来源 IP 每小时注册请求上限
+  # 可信反向代理网段（逗号分隔，支持 CIDR 与精确 IP，IPv4/IPv6 均可）。
+  # 默认空 = 完全不采信 X-Forwarded-For / X-Real-IP，一律使用 TCP 对端地址 remoteAddr。
+  # 只有在服务前面确实存在我们自己的反向代理（Nginx/TLB/Ingress）时才配置它，
+  # 并把代理自身的地址（例如 10.0.0.0/8 或 172.17.0.0/16）写进来；
+  # 绝不能写 0.0.0.0/0（那等于又变成无条件采信客户端头部）。
+  trusted-proxies: ${SECURITY_TRUSTED_PROXIES:}
+  # /auth/refresh 与 /auth/logout：未认证即可调用，且每次都要做 JWT 验签，因此按
+  # "真实来源 IP + 令牌指纹（sha256 前 16 位）"双维度限流（分钟窗口）。
+  token-endpoint:
+    ip-limit-per-minute: ${SECURITY_TOKEN_ENDPOINT_IP_LIMIT:30}
+    token-limit-per-minute: ${SECURITY_TOKEN_ENDPOINT_TOKEN_LIMIT:10}
+
+# AI 商品助手调用配额（按 userId 计；AI 调用是直接产生费用的外部依赖）
+ai:
+  quota:
+    daily-limit: ${AI_QUOTA_DAILY_LIMIT:50}          # 单账号每日上限
+    per-minute-limit: ${AI_QUOTA_PER_MINUTE_LIMIT:10} # 单账号每分钟上限
 
 # 校园身份认证（验证码下发与核销）配置
 # mail-enabled 是"验证码去哪儿"的唯一开关：
@@ -91,8 +118,11 @@ verify:
   mail-timeout-ms: ${MAIL_TIMEOUT_MS:5000}
   code-ttl-minutes: 5                # 验证码有效期，同时是"核验失败计数键"的 TTL
   max-failures: 5                    # 同一验证码最多允许输错 5 次，达到即作废
-  send-limit-per-email: 5            # 同一校园邮箱在 24 小时内最多发送 5 次
-  email-send-window-hours: 24
+  # 发送限流维度为"发起人 userId × 目标校园邮箱"（24 小时 3 次）。
+  # 不能退回"仅按邮箱计数"：那样任意账号都能把他人邮箱的当日额度打满，
+  # 使被攻击者当天无法认证，同时给对方持续投递垃圾验证码邮件。
+  send-limit-per-user-email: 3
+  user-email-send-window-hours: 24
   send-limit-per-user: 3             # 同一用户 10 分钟内最多发送 3 次
   user-send-window-minutes: 10
 
@@ -116,8 +146,12 @@ mybatis-plus:
       id-type: assign_id
 
 # DeepSeek AI 开放接口配置
+# api-key 的默认值刻意写成 CHANGE_ME_ 前缀的占位符：与 .env.example / ProdSecretsGuard.isPlaceholder
+# 使用同一套"未填写"判定规则（见 ProdSecretsGuard 的 PLACEHOLDER_PREFIX 常量）。
+# 未配置时 DeepSeekClient 会走本地优雅降级（结构化兜底文案/分类/估价），不影响本地开发。
+# 生产环境由部署平台注入 DEEPSEEK_API_KEY；若误把占位符带上线，AI 调用同样只会降级而不会外发请求。
 deepseek:
-  api-key: ${DEEPSEEK_API_KEY:your_deepseek_api_key_here}
+  api-key: ${DEEPSEEK_API_KEY:CHANGE_ME_deepseek_api_key}
   base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
   model: ${DEEPSEEK_MODEL:deepseek-chat}
   timeout: ${DEEPSEEK_TIMEOUT:15000}

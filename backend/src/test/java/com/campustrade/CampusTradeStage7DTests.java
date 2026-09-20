@@ -162,12 +162,27 @@ class CampusTradeStage7DTests {
         }
         createdGoodsIds.clear();
 
-        jdbcTemplate.update("DELETE FROM campus_trade.admin_audit_log WHERE target_type = 'REVIEW' AND admin_id = ?", ADMIN_ID);
+        // V12 起 report.reporter_id / admin_audit_log.admin_id / review.* 对 user 有外键：
+        // 删除夹具用户之前必须先把指向它们的举报工单、审计流水与评价清掉
+        // （评价类目标的工单不在上面按商品 ID 的清理范围内，因此这里按"涉及的用户"统一清理）。
+        jdbcTemplate.update("DELETE FROM campus_trade.admin_audit_log WHERE admin_id = ?", ADMIN_ID);
+        jdbcTemplate.update("DELETE FROM campus_trade.report WHERE reporter_id IN (?, ?, ?, ?) OR handled_by IN (?, ?, ?, ?)",
+                SELLER_ID, BUYER_ID, THIRD_PARTY_ID, ADMIN_ID, SELLER_ID, BUYER_ID, THIRD_PARTY_ID, ADMIN_ID);
+        jdbcTemplate.update("DELETE FROM campus_trade.review_like WHERE user_id IN (?, ?, ?, ?)",
+                SELLER_ID, BUYER_ID, THIRD_PARTY_ID, ADMIN_ID);
+        jdbcTemplate.update("DELETE FROM campus_trade.review WHERE reviewer_id IN (?, ?, ?, ?) OR reviewed_user_id IN (?, ?, ?, ?)",
+                SELLER_ID, BUYER_ID, THIRD_PARTY_ID, ADMIN_ID, SELLER_ID, BUYER_ID, THIRD_PARTY_ID, ADMIN_ID);
         jdbcTemplate.update("DELETE FROM campus_trade.user_credit_log WHERE user_id IN (?, ?, ?, ?)",
                 SELLER_ID, BUYER_ID, THIRD_PARTY_ID, ADMIN_ID);
         jdbcTemplate.update("DELETE FROM campus_trade.user_credit WHERE user_id IN (?, ?, ?, ?)",
                 SELLER_ID, BUYER_ID, THIRD_PARTY_ID, ADMIN_ID);
         for (String username : createdUsernames) {
+            // 注册接口会为新用户建立信用档案，而 V12 起 user_credit.user_id 对 user 有外键：
+            // 先按用户名定位并清理子表，再删用户，否则删除会被外键拒绝。
+            jdbcTemplate.update("DELETE FROM campus_trade.user_credit_log WHERE user_id IN "
+                    + "(SELECT id FROM campus_trade.\"user\" WHERE username = ?)", username);
+            jdbcTemplate.update("DELETE FROM campus_trade.user_credit WHERE user_id IN "
+                    + "(SELECT id FROM campus_trade.\"user\" WHERE username = ?)", username);
             jdbcTemplate.update("DELETE FROM campus_trade.user WHERE username = ?", username);
         }
         createdUsernames.clear();

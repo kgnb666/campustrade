@@ -213,12 +213,14 @@ public class CampusTradeFixStage2Tests {
             stringRedisTemplate.delete(RedisKeyConstants.goodsViewKey(testGoodsId));
         }
         if (testUserEntity != null) {
-            userMapper.deleteById(testUserEntity.getId());
+            // 先删子表再删父表：V12 起 student_verify.user_id 对 user 有外键，
+            // 先删用户会因"被引用行仍存在"而失败（NOT VALID 只豁免历史行）。
             studentVerifyMapper.delete(new LambdaQueryWrapper<StudentVerify>().eq(StudentVerify::getUserId, testUserEntity.getId()));
+            userMapper.deleteById(testUserEntity.getId());
         }
         if (sellerUserEntity != null) {
-            userMapper.deleteById(sellerUserEntity.getId());
             studentVerifyMapper.delete(new LambdaQueryWrapper<StudentVerify>().eq(StudentVerify::getUserId, sellerUserEntity.getId()));
+            userMapper.deleteById(sellerUserEntity.getId());
         }
         stringRedisTemplate.delete(RedisKeyConstants.GOODS_VIEW_DIRTY_IDS);
     }

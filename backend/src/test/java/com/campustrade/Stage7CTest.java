@@ -62,6 +62,12 @@ public class Stage7CTest {
     @Autowired
     private UserMapper userMapper;
 
+    @Autowired
+    private com.campustrade.mapper.UserCreditMapper userCreditMapper;
+
+    @Autowired
+    private com.campustrade.mapper.UserCreditLogMapper userCreditLogMapper;
+
     @BeforeEach
     void setUpRealUsers() {
         insertUserIfAbsent(NORMAL_USER_ID, NORMAL_USERNAME, "USER");
@@ -71,6 +77,16 @@ public class Stage7CTest {
     @AfterEach
     void tearDown() {
         SecurityContextHolder.clearContext();
+        // 先删子表再删父表：V12 起 user_credit / user_credit_log 对 user 有外键
+        // （评价事件的信用监听器会为被评用户建立信用档案），顺序颠倒会删不掉用户。
+        userCreditLogMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.campustrade.entity.UserCreditLog>()
+                .eq(com.campustrade.entity.UserCreditLog::getUserId, NORMAL_USER_ID));
+        userCreditLogMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.campustrade.entity.UserCreditLog>()
+                .eq(com.campustrade.entity.UserCreditLog::getUserId, ADMIN_USER_ID));
+        userCreditMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.campustrade.entity.UserCredit>()
+                .eq(com.campustrade.entity.UserCredit::getUserId, NORMAL_USER_ID));
+        userCreditMapper.delete(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.campustrade.entity.UserCredit>()
+                .eq(com.campustrade.entity.UserCredit::getUserId, ADMIN_USER_ID));
         userMapper.deleteById(NORMAL_USER_ID);
         userMapper.deleteById(ADMIN_USER_ID);
     }

@@ -135,6 +135,9 @@ class CampusTradeDataIntegrityTests {
         initUser(BUYER_ID, "stage4_integrity_buyer", "一致性买家", "USER");
         initUser(THIRD_PARTY_ID, "stage4_integrity_third", "一致性路人", "USER");
         initUser(ADMIN_ID, ADMIN_USERNAME, "一致性管理员", "ADMIN");
+        // 信用对账用例需要一个"从零开始"的用户：V12 起 user_credit.user_id 有外键，
+        // 被引用用户必须真实存在（NOT VALID 只豁免历史行，新行照样校验）。
+        initUser(FRESH_CREDIT_USER_ID, "stage4_integrity_fresh", "信用新档用户", "USER");
     }
 
     @AfterEach

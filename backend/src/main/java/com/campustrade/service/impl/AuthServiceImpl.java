@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.campustrade.common.ResultCode;
 import com.campustrade.common.constant.RedisKeyConstants;
+import com.campustrade.common.limit.RedisRateLimiter;
 import com.campustrade.dto.LoginRequestDTO;
 import com.campustrade.dto.RefreshTokenRequest;
 import com.campustrade.dto.RegisterRequestDTO;
@@ -18,6 +19,7 @@ import com.campustrade.service.UserService;
 import com.campustrade.vo.LoginVO;
 import com.campustrade.vo.TokenRefreshVO;
 import com.campustrade.vo.UserProfileVO;
+import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,6 +58,7 @@ public class AuthServiceImpl implements AuthService {
     private final JwtTokenProvider jwtTokenProvider;
     private final StringRedisTemplate stringRedisTemplate;
     private final UserService userService;
+    private final RedisRateLimiter redisRateLimiter;
 
     /** 连续登录失败多少次后锁定（默认 5 次） */    @Value("${security.login.max-failures:5}")
     private int loginMaxFailures;
@@ -67,6 +70,14 @@ public class AuthServiceImpl implements AuthService {
     /** 同一来源 IP 每小时允许的注册请求上限（默认 20 次） */
     @Value("${security.register.ip-limit-per-hour:20}")
     private int registerIpLimitPerHour;
+
+    /** /auth/refresh 与 /auth/logout 按来源 IP 的每分钟上限（默认 30 次） */
+    @Value("${security.token-endpoint.ip-limit-per-minute:30}")
+    private int tokenEndpointIpLimitPerMinute;
+
+    /** /auth/refresh 与 /auth/logout 按令牌指纹的每分钟上限（默认 10 次） */
+    @Value("${security.token-endpoint.token-limit-per-minute:10}")
+    private int tokenEndpointTokenLimitPerMinute;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -181,11 +192,23 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    public void logout(String bearerToken) {
+    public void logout(String bearerToken, String clientIp) {
         if (StringUtils.hasText(bearerToken) && bearerToken.startsWith("Bearer ")) {
             String token = bearerToken.substring(7);
-            long remainingMs = jwtTokenProvider.getRemainingExpiration(token);
 
+            // 0. 限流：/auth/logout 未认证即可调用，且每次都要做 JWT 验签。
+            //    按"真实来源 IP + 令牌指纹"双维度限制（令牌指纹只取摘要前 16 位，不存明文）。
+            enforceTokenEndpointLimit("logout", clientIp, token);
+
+            // 1. 单次解析令牌载荷：剩余过期时间与用户 ID 都从同一个 Claims 里取，
+            //    不再为了两个字段把同一个令牌解析两遍。
+            Claims claims = jwtTokenProvider.parseClaimsOrNull(token);
+            if (claims == null) {
+                log.warn("登出请求的令牌无法解析（签名非法或格式错误），跳过黑名单与会话清理");
+                return;
+            }
+
+            long remainingMs = Math.max(claims.getExpiration().getTime() - System.currentTimeMillis(), 0);
             if (remainingMs > 0) {
                 // 将未过期的 Token 写入 Redis 黑名单，TTL 为其剩余过期时间
                 stringRedisTemplate.opsForValue().set(
@@ -198,7 +221,7 @@ public class AuthServiceImpl implements AuthService {
             }
 
             // 删除该用户的 Refresh Token 会话：登出后刷新接口不再可用，无法"续命"出新令牌
-            Long userId = jwtTokenProvider.getUserIdAllowingExpired(token);
+            Long userId = jwtTokenProvider.getUserId(claims);
             if (userId != null) {
                 Boolean removed = stringRedisTemplate.delete(RedisKeyConstants.jwtRefreshKey(userId));
                 log.info("登出已清除 Refresh Token 会话: userId={}, removed={}", userId, removed);
@@ -209,26 +232,32 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    public TokenRefreshVO refresh(RefreshTokenRequest request) {
+    public TokenRefreshVO refresh(RefreshTokenRequest request, String clientIp) {
         if (request == null || !StringUtils.hasText(request.getRefreshToken())) {
             throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "Refresh Token 不能为空");
         }
 
         String refreshToken = request.getRefreshToken().trim();
 
-        // 1. 基础合法性与签名过期校验
-        if (!jwtTokenProvider.validateToken(refreshToken)) {
+        // 0. 限流：/auth/refresh 未认证即可调用，每次都要做 JWT 验签；
+        //    按"真实来源 IP + 令牌指纹"双维度限制，避免用一个伪造令牌把签名校验 CPU 打满。
+        enforceTokenEndpointLimit("refresh", clientIp, refreshToken);
+
+        // 1. 单次解析：合法性、令牌类型、用户身份都来自同一个 Claims（原实现解析了 3 次）
+        Claims claims = jwtTokenProvider.parseClaimsOrNull(refreshToken);
+        if (claims == null) {
             throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "Refresh Token 无效或已过期，请重新登录");
         }
 
         // 2. Token 类型校验，必须为 refresh 令牌
-        String tokenType = jwtTokenProvider.getTokenType(refreshToken);
+        Object tokenTypeClaim = claims.get("type");
+        String tokenType = tokenTypeClaim == null ? null : tokenTypeClaim.toString();
         if (!"refresh".equalsIgnoreCase(tokenType)) {
             throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "无效的令牌类型，必须使用 Refresh Token 进行续期");
         }
 
         // 3. 用户身份与 Redis 会话摘要匹配校验（Redis 只保存摘要，比对的是摘要而非令牌明文）
-        Long userId = jwtTokenProvider.getUserId(refreshToken);
+        Long userId = jwtTokenProvider.getUserId(claims);
         if (userId == null) {
             throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "无效的令牌载荷信息");
         }
@@ -318,6 +347,49 @@ public class AuthServiceImpl implements AuthService {
             log.warn("注册请求触发来源 IP 限频: ip={}, count={}, limit={}", clientIp, count, registerIpLimitPerHour);
             throw new BusinessException(429, "注册请求过于频繁，请稍后再试");
         }
+    }
+
+    /**
+     * {@code /auth/refresh} 与 {@code /auth/logout} 的双维度限流。
+     *
+     * <p>这两个接口<b>未认证即可调用</b>，且每次调用都要做一次 JWT 验签（HMAC + Base64 解码），
+     * 原先没有任何次数约束：攻击者可以用一个乱写的令牌把 CPU 打满（放大攻击成本极低），
+     * 也可以拿泄露的 refresh token 做在线暴力尝试。这里按两个维度同时计数：</p>
+     * <ul>
+     *   <li><b>来源 IP</b>（默认 30 次/分钟）：限制单一来源的整体强度。IP 取自
+     *       {@link com.campustrade.common.util.ClientIpUtils} 的可信代理解析，
+     *       伪造 {@code X-Forwarded-For} 不再能绕过；</li>
+     *   <li><b>令牌指纹</b>（默认 10 次/分钟）：限制"同一个令牌"被反复提交。
+     *       指纹是令牌 SHA-256 摘要的前 16 位，键里不出现令牌明文。</li>
+     * </ul>
+     *
+     * <p>日志只记录端点名、维度与计数，不打印 IP 与令牌指纹的组合明细。</p>
+     *
+     * @param endpoint  端点名（refresh / logout），用于拼键与日志
+     * @param clientIp  真实来源 IP（可信代理解析结果）
+     * @param rawToken  原始令牌（仅用于计算摘要，不落日志、不进键）
+     */
+    private void enforceTokenEndpointLimit(String endpoint, String clientIp, String rawToken) {
+        String fingerprint = TokenHashUtils.rateLimitFingerprint(rawToken);
+        boolean logout = "logout".equals(endpoint);
+
+        redisRateLimiter.enforce(
+                logout ? RedisKeyConstants.authLogoutIpKey(clientIp) : RedisKeyConstants.authRefreshIpKey(clientIp),
+                60L,
+                tokenEndpointIpLimitPerMinute,
+                endpoint + "-ip",
+                "ip=" + clientIp,
+                "请求过于频繁，请稍后再试"
+        );
+
+        redisRateLimiter.enforce(
+                logout ? RedisKeyConstants.authLogoutTokenKey(fingerprint) : RedisKeyConstants.authRefreshTokenKey(fingerprint),
+                60L,
+                tokenEndpointTokenLimitPerMinute,
+                endpoint + "-token",
+                "tokenFp=" + fingerprint,
+                "该令牌请求过于频繁，请稍后再试"
+        );
     }
 
     /**

@@ -22,7 +22,7 @@
 | :--- | :--- | :--- |
 | **后端框架** | Spring Boot 3.3.4 + Java 21 | 高性能后端企业级开发 |
 | **持久层** | MyBatis-Plus 3.5.7 + PostgreSQL 16 | 现代化 ORM 与高可靠开源关系型数据库 |
-| **数据库迁移** | Flyway（V1–V11） | 建表结构的**唯一真相源**（见下文"Schema 单一真相源"） |
+| **数据库迁移** | Flyway（V1–V12） | 建表结构的**唯一真相源**（见下文"Schema 单一真相源"） |
 | **高速缓存** | Redis 7.4（开启 AOF + 强制口令） | 会话、限流、验证码、分布式锁、浏览量计数 |
 | **对象存储** | MinIO（RELEASE.2024-10-13T13-34-11Z） | 兼容 AWS S3 的私有图片与文件存储 |
 | **前端应用** | Flutter 3.x + Dart 3.x | 跨平台移动 App / Web 客户端 |
@@ -206,6 +206,10 @@ flutter run -d chrome
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` / `DEEPSEEK_MODEL` | AI 估价/文案能力（可选，未配置时优雅降级） | 可选 |
 | `API_BASE_URL` | 前端 API 基址的**文档化默认值**（实际用 `--dart-define` 覆盖） | 可选 |
 | `SECURITY_LOGIN_MAX_FAILURES` / `SECURITY_LOGIN_LOCK_MINUTES` / `SECURITY_REGISTER_IP_LIMIT` | 登录失败锁定与注册限流阈值（有内置默认值） | 可选 |
+| `SECURITY_TRUSTED_PROXIES` | 可信反向代理网段（逗号分隔 CIDR / 精确 IP）。**默认空 = 不采信 `X-Forwarded-For`/`X-Real-IP`**；前面有 Nginx/TLB 时必须配置代理地址，绝不可写 `0.0.0.0/0` | 可选（有代理时必填） |
+| `SECURITY_TOKEN_ENDPOINT_IP_LIMIT` / `SECURITY_TOKEN_ENDPOINT_TOKEN_LIMIT` | `/auth/refresh`、`/auth/logout` 的按 IP / 按令牌指纹每分钟上限（默认 30 / 10） | 可选 |
+| `AI_QUOTA_DAILY_LIMIT` / `AI_QUOTA_PER_MINUTE_LIMIT` | AI 接口按 userId 的日配额与分钟频控（默认 50 / 10） | 可选 |
+| `SPRING_DATA_REDIS_POOL_*` | Lettuce 连接池参数（`commons-pool2` 已引入，参数真实生效） | 可选 |
 
 > ⚠️ `.env.example` 里所有凭据都是 `CHANGE_ME_*` **占位符**，不含任何可用口令；
 > 生产环境若继续使用 `CHANGE_ME_*` 前缀的值，`ProdSecretsGuard` 会直接拒绝启动。
@@ -237,12 +241,40 @@ cd frontend && flutter test         # 142 项
 
 ## Schema 单一真相源
 
-- **建表/索引/约束/种子数据的唯一真相源是 Flyway 迁移**：`backend/src/main/resources/db/migration/V1..V11__*.sql`。
+- **建表/索引/约束/种子数据的唯一真相源是 Flyway 迁移**：`backend/src/main/resources/db/migration/V1..V12__*.sql`。
   后端启动时自动执行（`spring.flyway.*`），从空库可一路建出完整结构。
 - `docker/postgres/init.sql` **只负责** `CREATE SCHEMA campus_trade` 与授权，**不含任何业务建表语句**。
   它仅在数据卷首次初始化时执行一次，即使删掉也不影响新环境（Flyway 会自行创建 schema）。
   （阶段 8 起移除了原先与 V1–V11 重复的那份建表语句副本——同一张表两份定义必然漂移。）
 - 生产 profile 下 `spring.flyway.baseline-on-migrate: false`：库结构来路不明时宁可启动失败，也不自动打基线。
+
+### 约束与历史脏数据（NOT VALID 外键）
+
+V10 / V12 给关键关联补的外键里，涉及**历史造数可能已有孤儿行**的部分一律使用 `NOT VALID`：
+
+| 迁移 | 约束 | 为什么 NOT VALID |
+| --- | --- | --- |
+| V10 | `review.order_id` / `review.goods_id` | 开发库存在历史造数孤儿评价（数百行） |
+| V12 | 12 条关联外键（`review.reviewer_id`、`review_like.*`、`browse_history.*`、`search_history.user_id`、`report.reporter_id`、`admin_audit_log.admin_id`、`student_verify.*`、`user_credit.user_id`） | 本机开发库实测 `user_credit.user_id` 已有 14 条孤儿行；直接 `ADD CONSTRAINT`（全表校验）会让迁移整体失败并回滚 |
+
+`NOT VALID` 的语义与运维要求：
+
+1. **只约束新数据**：既有孤儿行保留原样（迁移绝不删改业务数据），新增/更新会被拦截；
+2. **必须人工收口**：迁移成功 ≠ 数据干净。请按 `backend/docs/data-cleanup-orphans.sql` 执行
+   「只读盘点 → 备份 → 按业务取舍清理 →`VALIDATE CONSTRAINT` 全量校验」，
+   再用 `pg_constraint.convalidated` 复核；
+3. **锁与耗时**：`ADD CONSTRAINT ... FOREIGN KEY`（不带 `NOT VALID`）会扫描全表并持 `ACCESS EXCLUSIVE` 锁
+   （阻塞该表所有读写，大表上是分钟级）；带 `NOT VALID` 只登记定义，锁只持续毫秒级。
+   `VALIDATE CONSTRAINT` 只取 `SHARE UPDATE EXCLUSIVE` 锁，不阻塞读写，可在线执行。
+4. **多态列没有外键**：`report.target_id` 随 `target_type`（GOODS / REVIEW / USER）指向不同表，
+   单列外键无法表达；其一致性由 `chk_report_target_type` 值域约束 + 应用写入前多态存在性校验保证。
+
+### 校园邮箱唯一性（V12 部分唯一索引）
+
+V12 在 `student_verify(school_id, school_email)` 上建 `WHERE verify_status = 'SUCCESS'` 的部分唯一索引
+（一个校园邮箱只能被一个账号核销成功；`PENDING` 行不受限制）。
+若建索引前发现已存在「同一邮箱多条 SUCCESS」的历史冲突，迁移会**跳过建索引并打印冲突明细**
+（迁移本身仍然成功、不删任何数据），随后按 `backend/docs/data-cleanup-orphans.sql` 第 5 段人工处理。
 
 ---
 
@@ -276,6 +308,37 @@ docker compose -f docker-compose.prod.yml --env-file /etc/campustrade/prod.env u
 - `depends_on: condition: service_healthy` 保证中间件健康后才启动应用；
 - 应用以 `SPRING_PROFILES_ACTIVE=prod` 运行，容器内为非 root（uid 10001）、根文件系统只读、仅 `/tmp` 与日志卷可写；
 - 缺任何敏感项都会**拒绝启动**（`ProdSecretsGuard` / `VerifyMailProdGuard` / `JwtTokenProvider` 三处 fail-fast）。
+
+### 2.1 迁移后的数据清理（V10 / V12 的 NOT VALID 外键）
+
+`V1..V12` 在应用启动时自动执行。**其中 V10/V12 的 14 条外键全部是 `NOT VALID`：它们只约束新数据，
+历史孤儿行不会被自动校验，也不会被自动删除**（迁移绝不删改业务数据）。因此上线前/上线后请执行一次：
+
+```bash
+# 只读盘点（可直接执行，不修改任何数据）
+docker exec -i <postgres容器> psql -U campustrade -d campustrade \
+  < backend/docs/data-cleanup-orphans.sql   # 该文件前两段是只读 SELECT，其后为人工确认后的清理/收口 SQL
+```
+
+顺序与要点（详见 `backend/docs/data-cleanup-orphans.sql`）：
+
+1. **盘点**：`第 1 段` 输出各外键的孤儿行数量（含 V12 新增的 12 条）；
+2. **备份**：`第 2 段`（清理任何数据之前必须先做；默认方案是**什么都不做**）；
+3. **按业务取舍**：`第 3 段` 给出三种方案（保留 / 改挂 / 删除），默认不做删除；
+4. **收口**：`第 4 段` 用 `VALIDATE CONSTRAINT` 把 `NOT VALID` 升级为全量校验
+   （只取 `SHARE UPDATE EXCLUSIVE` 锁，可在线执行），再用 `pg_constraint.convalidated` 复核；
+5. **校园邮箱冲突**：若日志里出现 `[V12] 检测到校园邮箱重复认证冲突`，说明有历史数据把同一邮箱
+   认证给了多个账号，按 `第 5 段` 人工确认保留哪一个后修改其余行，再执行文件里给出的
+   `CREATE UNIQUE INDEX uk_student_verify_email_success ...`。
+
+### 2.2 反向代理与可信 IP（上线前务必确认）
+
+后端默认**不采信** `X-Forwarded-For` / `X-Real-IP`（按 TCP 对端地址计限流维度）。
+
+- 若生产入口本身就是应用容器（无反向代理）：**保持 `SECURITY_TRUSTED_PROXIES` 为空**，这是正确配置；
+- 若前面有 Nginx / TLB / Ingress：必须把代理地址写进 `SECURITY_TRUSTED_PROXIES`
+  （例如 `10.0.0.0/8,172.17.0.0/16`），否则所有用户会共用"代理的 IP"这一个限流维度，
+  IP 维度的登录失败锁定会误伤全站；**绝不能写 `0.0.0.0/0`**（等于又变成无条件采信客户端头部）。
 
 ### 3. 部署前端 Web 产物
 ```bash
@@ -317,5 +380,5 @@ cd frontend && flutter build web --dart-define=API_BASE_URL=https://app.example.
 - [x] 生产交付物：多阶段 `backend/Dockerfile`（非 root、JRE 21、健康检查）+ `docker-compose.prod.yml`
 - [x] 开发编排加固：中间件仅绑 `127.0.0.1`、Redis 口令、镜像 tag 固定、日志轮转与资源上限
 - [x] 脚本健壮性：外部命令退出码检查、选项 6 以测试结果决定退出码、工具链"环境变量 → PATH → 报错指引"
-- [x] Schema 单一真相源：`init.sql` 仅建 schema，建表全部交给 Flyway（空库验证 V1–V11 全 success）
+- [x] Schema 单一真相源：`init.sql` 仅建 schema，建表全部交给 Flyway（空库验证 V1–V12 全 success）
 - [x] 文档校正：阶段/状态/技术栈/端口/环境变量/门禁命令/生产部署同步到实际实现

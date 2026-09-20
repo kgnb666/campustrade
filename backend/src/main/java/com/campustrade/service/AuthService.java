@@ -36,11 +36,17 @@ public interface AuthService {
 
     /**
      * 用户登出（Access Token 进黑名单 + 清除该用户的 Refresh Token 会话）
+     *
+     * @param bearerToken 请求头 {@code Authorization} 的原值
+     * @param clientIp    请求来源 IP（按 IP 维度的限流；解析见 ClientIpUtils）
      */
-    void logout(String bearerToken);
+    void logout(String bearerToken, String clientIp);
 
     /**
      * 刷新访问令牌 (使用 Refresh Token 续期 Access Token，并轮换 Refresh Token)
+     *
+     * @param request  刷新请求
+     * @param clientIp 请求来源 IP（按 IP 维度的限流；解析见 ClientIpUtils）
      */
-    TokenRefreshVO refresh(RefreshTokenRequest request);
+    TokenRefreshVO refresh(RefreshTokenRequest request, String clientIp);
 }

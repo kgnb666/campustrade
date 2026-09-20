@@ -370,13 +370,18 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
         String reasonDesc = report.getReasonType();
         try {
             reasonDesc = ReportReasonType.valueOf(report.getReasonType()).getDescription();
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            // 枚举值域外的存量数据（历史造数/人工改库）：回退为原始字面量，但必须留痕
+            log.debug("举报原因类型不在枚举值域内，回退展示原始值: reasonType={}, msg={}",
+                    report.getReasonType(), e.getMessage());
         }
 
         String statusDesc = report.getStatus();
         try {
             statusDesc = ReportStatus.valueOf(report.getStatus()).getDescription();
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.debug("举报状态不在枚举值域内，回退展示原始值: status={}, msg={}",
+                    report.getStatus(), e.getMessage());
         }
 
         // 关联信息全部来自批量上下文（内存查表，零 SQL）
@@ -561,7 +566,9 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
         String opDesc = logEntity.getOperationType();
         try {
             opDesc = AdminOperationType.valueOf(logEntity.getOperationType()).getDescription();
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            log.debug("管理员操作类型不在枚举值域内，回退展示原始值: operationType={}, msg={}",
+                    logEntity.getOperationType(), e.getMessage());
         }
 
         return AdminAuditLogVO.builder()

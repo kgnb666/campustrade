@@ -78,6 +78,20 @@
         </dependency>
 
         <!--
+          Lettuce 连接池（commons-pool2）：Spring Boot 只有在类路径上存在
+          org.apache.commons:commons-pool2 时才会创建带池的 LettuceConnectionFactory，
+          否则 spring.data.redis.lettuce.pool.* 会被静默忽略 —— 表现为"配置写了连接池，
+          实际仍然所有请求共用一条 Lettuce 连接"。本项目的缓存访问包含多处按 userId/IP 的
+          计数（登录锁定、验证码限流、AI 配额、举报频控）与刷盘任务，突发时单连接会成为瓶颈，
+          因此显式引入并由 application.yml / application-prod.yml 配置池参数。
+          版本由 spring-boot-dependencies 统一管理，不写死版本号。
+        -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-pool2</artifactId>
+        </dependency>
+
+        <!--
           邮件下发（校园认证验证码）：提供 JavaMailSender / MimeMessageHelper。
           SMTP 连接信息只从环境变量读取（MAIL_HOST / MAIL_PORT / MAIL_USERNAME /
           MAIL_PASSWORD / MAIL_FROM，见 application.yml 的 verify.* 与 application-prod.yml），

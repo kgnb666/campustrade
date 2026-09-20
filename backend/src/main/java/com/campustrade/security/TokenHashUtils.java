@@ -24,6 +24,14 @@ public final class TokenHashUtils {
     /** 日志指纹长度：摘要前 8 位十六进制字符足以在单次排查窗口内区分不同令牌。 */
     private static final int FINGERPRINT_LENGTH = 8;
 
+    /**
+     * 限流键指纹长度：16 位十六进制（64 bit）。
+     *
+     * <p>限流键需要"同一令牌在同一次攻击中落到同一个键"，因此比日志指纹长一些；
+     * 仍然是摘要前缀而非令牌明文，键空间里不会出现可直接使用的凭据。</p>
+     */
+    private static final int RATE_LIMIT_FINGERPRINT_LENGTH = 16;
+
     private TokenHashUtils() {
         // 工具类，禁止实例化
     }
@@ -60,5 +68,22 @@ public final class TokenHashUtils {
         }
         String hex = sha256Hex(raw);
         return hex.substring(0, FINGERPRINT_LENGTH);
+    }
+
+    /**
+     * 计算用于 Redis 限流键的令牌指纹（摘要前 16 位十六进制）。
+     *
+     * <p>限流键与日志指纹分离：日志只需要"短到不泄露"，限流键在意的是
+     * "不同令牌不碰撞"，因此取更长前缀；两者都只是摘要片段，不会把令牌写进缓存键。</p>
+     *
+     * @param raw 原始令牌
+     * @return 16 位十六进制指纹；入参为空时返回 "empty"
+     */
+    public static String rateLimitFingerprint(String raw) {
+        if (raw == null || raw.isEmpty()) {
+            return "empty";
+        }
+        String hex = sha256Hex(raw);
+        return hex.substring(0, RATE_LIMIT_FINGERPRINT_LENGTH);
     }
 }

@@ -26,6 +26,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -82,6 +83,7 @@ public class CampusTradeFixStage1Tests {
     @BeforeEach
     void setUp() {
         cleanTestData();
+        ensureConcurrentUser();
     }
 
     @AfterEach
@@ -89,10 +91,33 @@ public class CampusTradeFixStage1Tests {
         cleanTestData();
     }
 
+    /**
+     * 并发信用用例直接以固定 ID 调用信用服务，V12 起 {@code user_credit.user_id} 有外键
+     * （NOT VALID 只豁免历史行，新行照样校验），因此被引用用户必须真实存在。
+     */
+    private void ensureConcurrentUser() {
+        if (userMapper.selectById(CONCURRENT_USER_ID) != null) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        userMapper.insert(User.builder()
+                .id(CONCURRENT_USER_ID)
+                .username("fix1_concurrent_user")
+                .password(UUID.randomUUID().toString())
+                .nickname("并发信用测试用户")
+                .role("USER")
+                .status("ACTIVE")
+                .createdTime(now)
+                .updatedTime(now)
+                .build());
+    }
+
     private void cleanTestData() {
-        userMapper.delete(new LambdaQueryWrapper<User>().in(User::getUsername, FROZEN_TEST_USER, REFRESH_TEST_USER, "fix1_concurrent_user"));
+        // 先删子表再删父表：V12 起 user_credit / user_credit_log 对 user 有外键，
+        // 顺序颠倒会因"被引用行仍然存在"而删不掉用户（NOT VALID 不豁免新增行）。
         userCreditMapper.delete(new LambdaQueryWrapper<UserCredit>().eq(UserCredit::getUserId, CONCURRENT_USER_ID));
         userCreditLogMapper.delete(new LambdaQueryWrapper<UserCreditLog>().eq(UserCreditLog::getUserId, CONCURRENT_USER_ID));
+        userMapper.delete(new LambdaQueryWrapper<User>().in(User::getUsername, FROZEN_TEST_USER, REFRESH_TEST_USER, "fix1_concurrent_user"));
         stringRedisTemplate.delete("auth:refresh:" + CONCURRENT_USER_ID);
     }
 
@@ -105,7 +130,7 @@ public class CampusTradeFixStage1Tests {
         LocalDateTime now = LocalDateTime.now();
         User user = User.builder()
                 .username(FROZEN_TEST_USER)
-                .password("$2a$10$abcdefghijklmnopqrstuvwxyz123456")
+                .password(UUID.randomUUID().toString())
                 .nickname("待冻结测试用户")
                 .role("USER")
                 .status("ACTIVE")
@@ -144,7 +169,7 @@ public class CampusTradeFixStage1Tests {
         LocalDateTime now = LocalDateTime.now();
         User user = User.builder()
                 .username(FROZEN_TEST_USER)
-                .password("$2a$10$abcdefghijklmnopqrstuvwxyz123456")
+                .password(UUID.randomUUID().toString())
                 .nickname("正常测试用户")
                 .role("USER")
                 .status("ACTIVE")
@@ -275,7 +300,7 @@ public class CampusTradeFixStage1Tests {
         LocalDateTime now = LocalDateTime.now();
         User user = User.builder()
                 .username(REFRESH_TEST_USER)
-                .password("$2a$10$abcdefghijklmnopqrstuvwxyz123456")
+                .password(UUID.randomUUID().toString())
                 .nickname("刷新令牌测试用户")
                 .role("USER")
                 .status("ACTIVE")
@@ -351,7 +376,7 @@ public class CampusTradeFixStage1Tests {
         LocalDateTime now = LocalDateTime.now();
         User user = User.builder()
                 .username(REFRESH_TEST_USER)
-                .password("$2a$10$abcdefghijklmnopqrstuvwxyz123456")
+                .password(UUID.randomUUID().toString())
                 .nickname("刷新白名单失配用户")
                 .role("USER")
                 .status("ACTIVE")
@@ -383,7 +408,7 @@ public class CampusTradeFixStage1Tests {
         LocalDateTime now = LocalDateTime.now();
         User user = User.builder()
                 .username(REFRESH_TEST_USER)
-                .password("$2a$10$abcdefghijklmnopqrstuvwxyz123456")
+                .password(UUID.randomUUID().toString())
                 .nickname("被冻结刷新用户")
                 .role("USER")
                 .status("FROZEN") // 账号被冻结

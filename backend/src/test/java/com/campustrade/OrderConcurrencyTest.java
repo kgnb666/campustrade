@@ -25,6 +25,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -228,6 +229,22 @@ public class OrderConcurrencyTest {
     @DisplayName("2. 并发信用分累加防漂移验证: 10 线程并发写入无丢失，流水与主档绝对相符")
     void test02_concurrentCreditAccumulation_noDrift() throws Exception {
         final Long testCreditUserId = 99991001L;
+
+        // V12 起 user_credit.user_id 有外键（NOT VALID 只豁免历史行，新行照样校验）：
+        // 被引用的用户行必须先真实存在，否则信用档案插入会被外键拒绝。
+        if (userMapper.selectById(testCreditUserId) == null) {
+            LocalDateTime now = LocalDateTime.now();
+            userMapper.insert(User.builder()
+                    .id(testCreditUserId)
+                    .username("order_conc_credit_user")
+                    .password(UUID.randomUUID().toString())
+                    .nickname("并发信用测试用户")
+                    .role("USER")
+                    .status("ACTIVE")
+                    .createdTime(now)
+                    .updatedTime(now)
+                    .build());
+        }
 
         // 清理历史测试数据
         userCreditLogMapper.delete(new LambdaQueryWrapper<UserCreditLog>().eq(UserCreditLog::getUserId, testCreditUserId));

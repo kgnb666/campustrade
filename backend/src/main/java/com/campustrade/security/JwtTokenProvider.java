@@ -159,6 +159,42 @@ public class JwtTokenProvider {
     }
 
     /**
+     * 一次性解析令牌载荷，供"单次请求内只需要解析一次"的调用方使用。
+     *
+     * <p>背景：{@code /auth/refresh} 与 {@code /auth/logout} 原先分别调用
+     * {@code validateToken} / {@code getTokenType} / {@code getUserId} /
+     * {@code getRemainingExpiration}，同一个令牌在一次请求内会被解析 2~3 次
+     * （每次都做一次 HMAC-Base64 验签）。这两个接口未认证即可调用，重复解析是纯浪费，
+     * 也让放大攻击更划算。改为解析一次后从同一个 {@link Claims} 取所需字段。</p>
+     *
+     * <p>签名合法但<b>已过期</b>的令牌同样返回其载荷：登出需要在令牌刚过期时也能清理
+     * Refresh 会话（否则用户"登不出去"）。签名非法/格式错误返回 {@code null}。</p>
+     *
+     * @param token 原始令牌
+     * @return 载荷；无法安全解析时返回 null
+     */
+    public Claims parseClaimsOrNull(String token) {
+        if (token == null || token.isBlank()) {
+            return null;
+        }
+        try {
+            return getClaims(token);
+        } catch (ExpiredJwtException ex) {
+            return ex.getClaims();
+        } catch (JwtException | IllegalArgumentException ex) {
+            log.warn("JWT 解析失败（签名非法或格式错误）: {}", ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 从已解析的载荷中读取用户 ID（避免为取一个字段再解析一次令牌）。
+     */
+    public Long getUserId(Claims claims) {
+        return claims == null ? null : extractUserId(claims);
+    }
+
+    /**
      * 获取用户名
      */
     public String getUsername(String token) {
