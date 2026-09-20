@@ -4,6 +4,7 @@ import '../models/ai_model.dart';
 import '../models/category_model.dart';
 import '../services/ai_service.dart';
 import '../utils/api_error.dart';
+import '../utils/ui_feedback.dart';
 
 /// DeepSeek AI 商品发布助手底部弹窗
 class AiGoodsAssistantSheet {
@@ -20,7 +21,7 @@ class AiGoodsAssistantSheet {
   }) async {
     if (_isSheetOpen) return;
     if (title.trim().isEmpty) {
-      Get.snackbar('提示', '请先填写商品标题，AI 才能为您构思描述');
+      safeSnackbar('提示', '请先填写商品标题，AI 才能为您构思描述');
       return;
     }
 
@@ -40,7 +41,7 @@ class AiGoodsAssistantSheet {
             onAdopt: (newTitle, newDesc) {
               Navigator.pop(ctx);
               onAdopt(newTitle, newDesc);
-              Get.snackbar(
+              safeSnackbar(
                 '已采纳',
                 'AI 生成的描述已填入发布表单',
                 snackPosition: SnackPosition.BOTTOM,
@@ -66,7 +67,7 @@ class AiGoodsAssistantSheet {
   }) async {
     if (_isSheetOpen) return;
     if (title.trim().isEmpty) {
-      Get.snackbar('提示', '请先输入商品标题，AI 才能精准分析所属品类');
+      safeSnackbar('提示', '请先输入商品标题，AI 才能精准分析所属品类');
       return;
     }
 
@@ -86,7 +87,7 @@ class AiGoodsAssistantSheet {
             onAdopt: (cat) {
               Navigator.pop(ctx);
               onAdopt(cat);
-              Get.snackbar(
+              safeSnackbar(
                 '已采纳',
                 '已自动选中推荐分类【${cat.name}】',
                 snackPosition: SnackPosition.BOTTOM,
@@ -113,7 +114,7 @@ class AiGoodsAssistantSheet {
   }) async {
     if (_isSheetOpen) return;
     if (title.trim().isEmpty) {
-      Get.snackbar('提示', '请先输入商品标题，AI 才能进行市场估价');
+      safeSnackbar('提示', '请先输入商品标题，AI 才能进行市场估价');
       return;
     }
 
@@ -134,7 +135,7 @@ class AiGoodsAssistantSheet {
             onAdopt: (price) {
               Navigator.pop(ctx);
               onAdopt(price);
-              Get.snackbar(
+              safeSnackbar(
                 '已采纳',
                 '已填入 AI 建议售价 ¥$price',
                 snackPosition: SnackPosition.BOTTOM,

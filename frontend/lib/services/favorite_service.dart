@@ -1,8 +1,8 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import '../api/dio_client.dart';
 import '../models/favorite_model.dart';
 import '../utils/api_error.dart';
+import '../utils/app_logger.dart';
 import '../utils/json_cast.dart';
 
 /// 收藏网络服务
@@ -32,7 +32,7 @@ class FavoriteService {
         );
       }
     } catch (e) {
-      debugPrint('[FavoriteService] addFavorite goodsId=$goodsId error: $e');
+      AppLogger.error('[FavoriteService] addFavorite goodsId=$goodsId error', error: e);
       throw ApiException.from(e, fallback: '收藏失败');
     }
   }
@@ -48,7 +48,7 @@ class FavoriteService {
         );
       }
     } catch (e) {
-      debugPrint('[FavoriteService] removeFavorite goodsId=$goodsId error: $e');
+      AppLogger.error('[FavoriteService] removeFavorite goodsId=$goodsId error', error: e);
       throw ApiException.from(e, fallback: '取消收藏失败');
     }
   }
@@ -65,18 +65,24 @@ class FavoriteService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[FavoriteService] checkFavorite goodsId=$goodsId error: $e');
+      AppLogger.warn('[FavoriteService] checkFavorite goodsId=$goodsId error', error: e);
       throw ApiException.from(e, fallback: '收藏状态查询失败');
     }
   }
 
   /// 分页获取我的收藏列表
-  Future<Map<String, dynamic>> getFavoriteList({int page = 1, int size = 10}) async {
+  ///
+  /// [cancelToken] 由控制器持有：刷新/离开页面时取消在途请求（见 [GoodsService] 的说明）。
+  Future<Map<String, dynamic>> getFavoriteList({
+    int page = 1,
+    int size = 10,
+    CancelToken? cancelToken,
+  }) async {
     try {
       final response = await _dio.get('/favorite/list', queryParameters: {
         'page': page,
         'size': size,
-      });
+      }, cancelToken: cancelToken);
       if (response.statusCode == 200 && response.data['code'] == 200) {
         final data = response.data['data'];
         final recordsJson = data['records'] as List<dynamic>? ?? [];
@@ -95,7 +101,7 @@ class FavoriteService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[FavoriteService] getFavoriteList page=$page error: $e');
+      AppLogger.warn('[FavoriteService] getFavoriteList page=$page error', error: e);
       throw ApiException.from(e, fallback: '收藏列表加载失败');
     }
   }

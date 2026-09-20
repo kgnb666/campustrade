@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import '../models/api_response.dart';
 import '../models/review.dart';
+import '../utils/app_logger.dart';
 import 'dio_client.dart';
 
 /// 评价领域核心网络 API 接口服务
@@ -27,7 +27,7 @@ class ReviewApi {
     } on DioException catch (e) {
       return _handleDioException<ReviewModel>(e);
     } catch (e) {
-      debugPrint('[ReviewApi] createReview error: $e');
+      AppLogger.warn('[ReviewApi] createReview error', error: e);
       return ApiResponse<ReviewModel>(
         code: 500,
         message: '创建评价失败，请稍后重试',
@@ -58,7 +58,7 @@ class ReviewApi {
     } on DioException catch (e) {
       return _handleDioException<ReviewPageResult>(e);
     } catch (e) {
-      debugPrint('[ReviewApi] getReviewsByUser error: $e');
+      AppLogger.warn('[ReviewApi] getReviewsByUser error', error: e);
       return ApiResponse<ReviewPageResult>(
         code: 500,
         message: '用户评价加载失败，请稍后重试',
@@ -89,7 +89,7 @@ class ReviewApi {
     } on DioException catch (e) {
       return _handleDioException<ReviewPageResult>(e);
     } catch (e) {
-      debugPrint('[ReviewApi] getReviewsByGoods error: $e');
+      AppLogger.warn('[ReviewApi] getReviewsByGoods error', error: e);
       return ApiResponse<ReviewPageResult>(
         code: 500,
         message: '商品评价加载失败，请稍后重试',
@@ -112,7 +112,7 @@ class ReviewApi {
     } on DioException catch (e) {
       return _handleDioException<OrderReviewStatusModel>(e);
     } catch (e) {
-      debugPrint('[ReviewApi] getOrderReviewStatus error: $e');
+      AppLogger.warn('[ReviewApi] getOrderReviewStatus error', error: e);
       return ApiResponse<OrderReviewStatusModel>(
         code: 500,
         message: '评价状态加载失败，请稍后重试',
@@ -141,7 +141,7 @@ class ReviewApi {
         } catch (e, stack) {
           // 解析失败不能静默：否则 code 仍是 200 而 data 为 null，
           // 上层会把服务端的 'success' 当错误文案展示，问题被藏起来。
-          debugPrint('[_parseApiResponse] dataParser failed: $e\n$stack');
+          AppLogger.error('[_parseApiResponse] dataParser failed', error: e, stackTrace: stack);
           return ApiResponse<T>(
             code: 500,
             message: '数据解析失败，请稍后重试',

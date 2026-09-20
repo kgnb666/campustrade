@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
+// 仅为 @visibleForTesting 注解（package:flutter/foundation.dart 转出的 meta 注解）
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import '../config/app_config.dart';
 import '../controllers/auth_controller.dart';
 import '../routes/app_routes.dart';
 import '../services/storage_service.dart';
+import '../utils/app_logger.dart';
 import 'package:get/get.dart' as getx;
 
 /// 统一 Dio 网络客户端封装 (集成 401 自动无感刷新与并发请求排队重放)
@@ -56,21 +58,17 @@ class DioClient {
               options.headers['Authorization'] = 'Bearer $token';
             }
           }
-          if (kDebugMode) {
-            debugPrint('[Dio Req] ${options.method} ${options.uri}');
-          }
+          AppLogger.debug('[Dio Req] ${options.method} ${options.uri}');
           return handler.next(options);
         },
         onResponse: (response, handler) {
-          if (kDebugMode) {
-            debugPrint('[Dio Resp] ${response.statusCode} ${response.requestOptions.uri}');
-          }
+          AppLogger.debug(
+              '[Dio Resp] ${response.statusCode} ${response.requestOptions.uri}');
           return handler.next(response);
         },
         onError: (DioException e, handler) async {
-          if (kDebugMode) {
-            debugPrint('[Dio Err] ${e.response?.statusCode} ${e.message} path=${e.requestOptions.path}');
-          }
+          AppLogger.debug(
+              '[Dio Err] ${e.response?.statusCode} ${e.message} path=${e.requestOptions.path}');
 
           final statusCode = e.response?.statusCode;
           final requestPath = e.requestOptions.path;
@@ -98,9 +96,8 @@ class DioClient {
                 return handler.next(retryErr);
               } catch (retryUnknown, retryStack) {
                 // 重放失败但非 DioException（解析/拦截器异常）：记录后回传原 401
-                if (kDebugMode) {
-                  debugPrint('[DioClient] 刷新后重放请求失败: $retryUnknown\n$retryStack');
-                }
+                AppLogger.warn('[DioClient] 刷新后重放请求失败',
+                    error: retryUnknown, stackTrace: retryStack);
                 return handler.next(e);
               }
             } else {
@@ -170,9 +167,7 @@ class DioClient {
         completer.complete(false);
       }
     } catch (err, stack) {
-      if (kDebugMode) {
-        debugPrint('[_tryRefreshToken failed]: $err\n$stack');
-      }
+      AppLogger.warn('[_tryRefreshToken failed]', error: err, stackTrace: stack);
       completer.complete(false);
     } finally {
       // 无论成功失败，释放互斥锁，允许后续全新周期再次刷新
@@ -230,9 +225,7 @@ class DioClient {
       }
     } catch (e, stack) {
       // 跳转失败（例如测试环境没有 Navigator）不应吞掉：记录以便排障
-      if (kDebugMode) {
-        debugPrint('[DioClient] 会话过期跳转登录失败: $e\n$stack');
-      }
+      AppLogger.warn('[DioClient] 会话过期跳转登录失败', error: e, stackTrace: stack);
     }
   }
 

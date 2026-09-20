@@ -1,10 +1,10 @@
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:dio/dio.dart';
 import 'package:get/get.dart';
 import '../config/app_config.dart';
 import '../models/history_model.dart';
 import '../services/history_service.dart';
 import '../utils/api_error.dart';
+import '../utils/app_logger.dart';
 import '../utils/json_cast.dart';
 import '../utils/ui_feedback.dart';
 
@@ -29,6 +29,9 @@ class HistoryController extends GetxController {
   /// 列表请求序号：用于作废在途的旧响应
   int _listRequestSeq = 0;
 
+  /// 列表请求的取消令牌：新请求发起时取消上一个仍在途的请求（见 [GoodsController] 同名字段）
+  CancelToken? _listCancelToken;
+
   bool _closed = false;
 
   @override
@@ -39,7 +42,10 @@ class HistoryController extends GetxController {
 
   @override
   void onClose() {
+    // 关闭后不仅不再写回状态，在途请求也一并取消
     _closed = true;
+    _listCancelToken?.cancel('HistoryController closed');
+    _listCancelToken = null;
     super.onClose();
   }
 
@@ -60,10 +66,16 @@ class HistoryController extends GetxController {
     final int requestId = ++_listRequestSeq;
     final int page = currentPage.value;
 
+    // 只有最新一次列表请求的结果有意义：取消上一个仍在途的请求
+    _listCancelToken?.cancel('superseded by a newer history list request');
+    final CancelToken cancelToken = CancelToken();
+    _listCancelToken = cancelToken;
+
     try {
       final res = await _historyService.getHistoryList(
         page: page,
         size: AppConfig.historyPageSize,
+        cancelToken: cancelToken,
       );
 
       if (_isStale(requestId)) return;
@@ -84,7 +96,7 @@ class HistoryController extends GetxController {
       if (_isStale(requestId)) return;
 
       errorMessage.value = describeApiError(e, fallback: '浏览足迹加载失败');
-      debugPrint('[HistoryController] loadHistory page=$page error: $e\n$stack');
+      AppLogger.error('[HistoryController] loadHistory page=$page error', error: e, stackTrace: stack);
 
       if (!refresh) {
         // 回滚页码，避免永久跳过这一页

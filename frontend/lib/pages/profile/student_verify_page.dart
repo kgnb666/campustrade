@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../../controllers/auth_controller.dart';
 import '../../models/user_model.dart';
+import '../../utils/ui_feedback.dart';
 
 /// 校园身份认证页面
 ///
@@ -49,15 +50,15 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
 
   Future<void> _handleSendCode() async {
     if (_selectedSchool == null) {
-      Get.snackbar('提示', '请先选择所属高校', snackPosition: SnackPosition.BOTTOM);
+      safeSnackbar('提示', '请先选择所属高校', snackPosition: SnackPosition.BOTTOM);
       return;
     }
     if (_studentNumberController.text.trim().isEmpty) {
-      Get.snackbar('提示', '请填写学号', snackPosition: SnackPosition.BOTTOM);
+      safeSnackbar('提示', '请填写学号', snackPosition: SnackPosition.BOTTOM);
       return;
     }
     if (_emailController.text.trim().isEmpty) {
-      Get.snackbar('提示', '请填写校园官方邮箱', snackPosition: SnackPosition.BOTTOM);
+      safeSnackbar('提示', '请填写校园官方邮箱', snackPosition: SnackPosition.BOTTOM);
       return;
     }
 
@@ -108,8 +109,9 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
       _verifyCodeController.text,
     );
 
-    // 核验失败：清空输入方便重试；失败原因（验证码错误 / 已失效 / 发送过于频繁）
-    // 已由 AuthController 通过 Get.snackbar 提示，重新发送入口在同一页面即可继续操作。
+    // 核验失败：清空输入方便重试；失败原因（验证码错误 / 已失效 / 邮箱已被他人认证、
+    // 发送过于频繁等业务错误）统一由 AuthController 经 safeSnackbar 给出服务端文案，
+    // 重新发送入口在同一页面即可继续操作。
     if (!ok && mounted) {
       setState(() {
         _verifyCodeController.clear();

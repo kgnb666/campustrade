@@ -4,6 +4,7 @@ import '../../controllers/favorite_controller.dart';
 import '../../models/favorite_model.dart';
 import '../../routes/app_routes.dart';
 import '../../models/status_enums.dart';
+import '../../utils/page_controller_scope.dart';
 import '../../widgets/goods_thumbnail.dart';
 
 /// 我的收藏页面
@@ -15,12 +16,19 @@ class FavoritePage extends StatefulWidget {
 }
 
 class _FavoritePageState extends State<FavoritePage> {
-  final FavoriteController _controller = Get.put(FavoriteController());
+  /// 本页面自己的收藏控制器：随本路由释放，再次进入时是干净的新实例
+  /// （此前是全局单例，第二次进入不会重新加载，列表可能是旧的）。
+  late final PageControllerRef<FavoriteController> _controllerRef;
+  FavoriteController get _controller => _controllerRef.controller;
+
   final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
+    _controllerRef = PageControllerScope.acquire<FavoriteController>(
+      () => FavoriteController(),
+    );
     _scrollController.addListener(_onScroll);
   }
 
@@ -34,6 +42,7 @@ class _FavoritePageState extends State<FavoritePage> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _controllerRef.release();
     super.dispose();
   }
 

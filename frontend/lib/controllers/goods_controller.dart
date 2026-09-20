@@ -1,3 +1,4 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../config/app_config.dart';
@@ -5,6 +6,7 @@ import '../models/category_model.dart';
 import '../models/goods_model.dart';
 import '../services/goods_service.dart';
 import '../utils/api_error.dart';
+import '../utils/app_logger.dart';
 import '../utils/json_cast.dart';
 import '../utils/ui_feedback.dart';
 import '../models/status_enums.dart';
@@ -18,7 +20,22 @@ import '../models/status_enums.dart';
 ///    从而杜绝"下拉刷新 + 上拉加载"并发时的重复/错序追加。
 /// 3. 控制器关闭（[_closed]）后丢弃所有迟到的写入。
 class GoodsController extends GetxController {
+  /// "我的发布"页专属实例（集市页使用无 tag 的默认实例）。
+  ///
+  /// 两个页面此前共用同一个实例：该实例的 `onInit` 只在第一次 `Get.put` 时执行，
+  /// 于是"我的发布"能否正常工作取决于"集市页是否先被访问过"，页面进入顺序一变
+  /// 就可能出现列表空白且无法自愈（详见 `lib/utils/page_controller_scope.dart`）。
+  static const String tagMyGoods = 'GoodsController@my-goods';
+
   final GoodsService _goodsService = GoodsService();
+
+  /// 是否在 [onInit] 时预热集市页数据（分类 / 商品列表 / 热搜与搜索历史）。
+  ///
+  /// 集市页需要（默认 true）；"我的发布"页只用 [loadMyGoods]，
+  /// 传 false 可避免进入该页时白跑四个与它无关的请求。
+  final bool autoLoadMarketplace;
+
+  GoodsController({this.autoLoadMarketplace = true});
 
   // 分类数据
   final RxList<CategoryModel> categories = <CategoryModel>[].obs;
@@ -53,21 +70,36 @@ class GoodsController extends GetxController {
   /// 列表请求序号：每发起一次列表请求自增，用于作废在途的旧响应。
   int _listRequestSeq = 0;
 
+  /// 集市列表请求的取消令牌：新请求发起时取消上一个仍在途的请求。
+  ///
+  /// 请求序号只能"丢弃迟到响应"，旧请求仍会真实跑完一次往返；快速切分类、
+  /// 改关键词、连点搜索时会同时挂着多个真实请求（以及后端的搜索历史写入）。
+  CancelToken? _listCancelToken;
+
+  /// "我的商品"请求的取消令牌
+  CancelToken? _myGoodsCancelToken;
+
   /// 控制器是否已关闭（关闭后丢弃所有迟到响应）
   bool _closed = false;
 
   @override
   void onInit() {
     super.onInit();
-    loadCategories();
-    loadGoods(refresh: true);
-    loadSearchExtras();
+    if (autoLoadMarketplace) {
+      loadCategories();
+      loadGoods(refresh: true);
+      loadSearchExtras();
+    }
   }
 
   @override
   void onClose() {
-    // 没有 CancelToken 时，至少保证关闭后的响应不再写回已销毁的控制器
+    // 关闭后不仅不再写回状态，在途的请求也一并取消，不再等它们跑完
     _closed = true;
+    _listCancelToken?.cancel('GoodsController closed');
+    _myGoodsCancelToken?.cancel('GoodsController closed');
+    _listCancelToken = null;
+    _myGoodsCancelToken = null;
     super.onClose();
   }
 
@@ -90,7 +122,7 @@ class GoodsController extends GetxController {
       historyKeywords.assignAll(histories);
     } catch (e, stack) {
       if (_closed) return;
-      debugPrint('[GoodsController] loadSearchExtras 失败（热搜/历史降级为隐藏）: $e\n$stack');
+      AppLogger.warn('[GoodsController] loadSearchExtras 失败（热搜/历史降级为隐藏）', error: e, stackTrace: stack);
     }
   }
 
@@ -104,7 +136,7 @@ class GoodsController extends GetxController {
     } catch (e, stack) {
       if (_closed) return;
       categoryErrorMessage.value = describeApiError(e, fallback: '分类加载失败');
-      debugPrint('[GoodsController] loadCategories error: $e\n$stack');
+      AppLogger.error('[GoodsController] loadCategories error', error: e, stackTrace: stack);
     }
   }
 
@@ -123,6 +155,11 @@ class GoodsController extends GetxController {
     final int requestId = ++_listRequestSeq;
     final int page = currentPage.value;
 
+    // 只有最新一次列表请求的结果有意义：取消上一个仍在途的请求
+    _listCancelToken?.cancel('superseded by a newer goods list request');
+    final CancelToken cancelToken = CancelToken();
+    _listCancelToken = cancelToken;
+
     try {
       final res = searchKeyword.value.isNotEmpty
           ? await _goodsService.searchGoods(
@@ -130,11 +167,13 @@ class GoodsController extends GetxController {
               size: AppConfig.goodsPageSize,
               keyword: searchKeyword.value,
               categoryId: selectedCategoryId.value,
+              cancelToken: cancelToken,
             )
           : await _goodsService.getGoodsList(
               page: page,
               size: AppConfig.goodsPageSize,
               categoryId: selectedCategoryId.value,
+              cancelToken: cancelToken,
             );
 
       // 已被更新的请求（如刷新）取代：整份丢弃，绝不再追加，避免重复/错序
@@ -155,7 +194,7 @@ class GoodsController extends GetxController {
       if (_isStale(requestId)) return;
 
       errorMessage.value = describeApiError(e, fallback: '商品列表加载失败');
-      debugPrint('[GoodsController] loadGoods page=$page error: $e\n$stack');
+      AppLogger.error('[GoodsController] loadGoods page=$page error', error: e, stackTrace: stack);
 
       if (!refresh) {
         // 加载更多失败必须回滚页码，否则下一次上拉会直接跳过这一页
@@ -199,14 +238,20 @@ class GoodsController extends GetxController {
   Future<void> loadMyGoods() async {
     isMyGoodsLoading.value = true;
     myGoodsErrorMessage.value = '';
+
+    // 连点"刷新"或下拉刷新时会并发多个请求：取消上一个仍在途的
+    _myGoodsCancelToken?.cancel('superseded by a newer my-goods request');
+    final CancelToken cancelToken = CancelToken();
+    _myGoodsCancelToken = cancelToken;
+
     try {
-      final list = await _goodsService.getMyGoods();
+      final list = await _goodsService.getMyGoods(cancelToken: cancelToken);
       if (_closed) return;
       myGoodsList.assignAll(list);
     } catch (e, stack) {
       if (_closed) return;
       myGoodsErrorMessage.value = describeApiError(e, fallback: '加载我的商品失败');
-      debugPrint('[GoodsController] loadMyGoods error: $e\n$stack');
+      AppLogger.error('[GoodsController] loadMyGoods error', error: e, stackTrace: stack);
       // 列表非空（刷新失败）用 snackbar 告知；列表为空时页面本身就是错误态，
       // 不再额外弹窗，避免"打开页面就弹提示"的噪音与残留定时器。
       if (myGoodsList.isNotEmpty) {
@@ -228,7 +273,7 @@ class GoodsController extends GetxController {
           backgroundColor: Colors.green.shade600,
           colorText: Colors.white);
     } catch (e, stack) {
-      debugPrint('[GoodsController] deleteGoods id=$id error: $e\n$stack');
+      AppLogger.error('[GoodsController] deleteGoods id=$id error', error: e, stackTrace: stack);
       safeSnackbar('删除失败', describeApiError(e, fallback: '删除商品失败'));
     }
   }
@@ -250,7 +295,7 @@ class GoodsController extends GetxController {
         colorText: Colors.white,
       );
     } catch (e, stack) {
-      debugPrint('[GoodsController] toggleGoodsStatus id=$id error: $e\n$stack');
+      AppLogger.error('[GoodsController] toggleGoodsStatus id=$id error', error: e, stackTrace: stack);
       safeSnackbar('操作失败', describeApiError(e, fallback: '商品状态修改失败'));
     }
   }

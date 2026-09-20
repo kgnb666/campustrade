@@ -1,6 +1,6 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:get/get.dart';
+import '../utils/app_logger.dart';
 import '../utils/constants.dart';
 
 /// 本地高安全键值存储服务 (基于 Flutter Secure Storage)
@@ -33,8 +33,10 @@ class StorageService extends GetxService {
     } catch (e, stack) {
       if (!_degraded) {
         _degraded = true;
-        debugPrint(
-          '[StorageService] 安全存储不可用（$operation 失败），已降级为无持久化模式: $e\n$stack',
+        AppLogger.error(
+          '[StorageService] 安全存储不可用（$operation 失败），已降级为无持久化模式',
+          error: e,
+          stackTrace: stack,
         );
       }
       return null;

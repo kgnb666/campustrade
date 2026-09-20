@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import '../../controllers/goods_controller.dart';
 import '../../models/goods_model.dart';
 import '../../routes/app_routes.dart';
+import '../../utils/page_controller_scope.dart';
 import '../../widgets/goods_thumbnail.dart';
 
 /// 商品列表主页 (支持搜索、分类筛选、分页流式加载)
@@ -14,14 +15,22 @@ class GoodsListPage extends StatefulWidget {
 }
 
 class _GoodsListPageState extends State<GoodsListPage> {
-  late final GoodsController _controller;
+  /// 本页面自己的商品控制器（集市页默认实例）。
+  ///
+  /// 由路由 binding 注册、随本路由释放；没有 binding 时（直接以 widget 构造页面）
+  /// 退化为自建自释放。绝不与"我的发布"共用实例——共用时任一页面的写入都会串到另一页面。
+  late final PageControllerRef<GoodsController> _controllerRef;
+  GoodsController get _controller => _controllerRef.controller;
+
   final TextEditingController _searchEditCtrl = TextEditingController();
   final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _controller = Get.put(GoodsController());
+    _controllerRef = PageControllerScope.acquire<GoodsController>(
+      () => GoodsController(),
+    );
     _scrollController.addListener(_onScroll);
   }
 
@@ -48,6 +57,7 @@ class _GoodsListPageState extends State<GoodsListPage> {
   void dispose() {
     _searchEditCtrl.dispose();
     _scrollController.dispose();
+    _controllerRef.release();
     super.dispose();
   }
 

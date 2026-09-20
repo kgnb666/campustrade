@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import '../api/dio_client.dart';
 import '../models/ai_model.dart';
+import '../utils/app_logger.dart';
 
 /// DeepSeek AI 商品助手网络服务
 class AiService {
@@ -29,7 +29,7 @@ class AiService {
       }
       throw Exception(response.data['message'] ?? 'AI 生成描述失败');
     } catch (e) {
-      debugPrint('[AiService] generateDescription error: $e');
+      AppLogger.error('[AiService] generateDescription error', error: e);
       rethrow;
     }
   }
@@ -52,7 +52,7 @@ class AiService {
       }
       throw Exception(response.data['message'] ?? 'AI 推荐分类失败');
     } catch (e) {
-      debugPrint('[AiService] recommendCategory error: $e');
+      AppLogger.error('[AiService] recommendCategory error', error: e);
       rethrow;
     }
   }
@@ -79,7 +79,7 @@ class AiService {
       }
       throw Exception(response.data['message'] ?? 'AI 估价失败');
     } catch (e) {
-      debugPrint('[AiService] suggestPrice error: $e');
+      AppLogger.error('[AiService] suggestPrice error', error: e);
       rethrow;
     }
   }

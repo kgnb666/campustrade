@@ -54,6 +54,12 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
 
+  # 端到端冒烟测试（integration_test/），需要真实后端与设备：
+  #   flutter test integration_test -d windows
+  # 注意：`flutter test` 只收集 test/ 目录，integration_test/ 不会被它执行。
+  integration_test:
+    sdk: flutter
+
   # 代码生成与 JSON 序列化生成器
   build_runner: ^2.4.12
   json_serializable: ^6.8.0

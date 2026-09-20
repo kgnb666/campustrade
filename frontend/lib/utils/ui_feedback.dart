@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
+import 'app_logger.dart';
+
 /// UI 反馈的安全包装。
 ///
 /// 为什么需要它：控制器里的 `Get.snackbar` 是"从状态层触发的 UI 副作用"，
@@ -22,7 +24,7 @@ void safeSnackbar(
   // 异步执行的，无法用 try/catch 拦住）。因此必须在调用前显式检查 overlay 是否存在：
   // 没有 overlay（单元测试直接驱动控制器、页面已销毁、App 退出中）就只留日志。
   if (Get.overlayContext == null) {
-    debugPrint('[safeSnackbar] 当前无 Overlay，跳过提示（$title / $message）');
+    AppLogger.debug('[safeSnackbar] 当前无 Overlay，跳过提示（$title / $message）');
     return;
   }
   try {
@@ -35,7 +37,7 @@ void safeSnackbar(
       duration: duration,
     );
   } catch (e, stack) {
-    debugPrint('[safeSnackbar] 提示展示失败（$title / $message）: $e\n$stack');
+    AppLogger.warn('[safeSnackbar] 提示展示失败（$title / $message）', error: e, stackTrace: stack);
   }
 }
 
@@ -59,11 +61,11 @@ void safeOffNamed(String route) => _safeNavigate(
 void _safeNavigate(void Function() action, String label) {
   try {
     if (Get.key.currentState == null) {
-      debugPrint('[safeNavigate] 当前没有 Navigator，跳过 $label');
+      AppLogger.debug('[safeNavigate] 当前没有 Navigator，跳过 $label');
       return;
     }
     action();
   } catch (e, stack) {
-    debugPrint('[safeNavigate] $label 失败: $e\n$stack');
+    AppLogger.warn('[safeNavigate] $label 失败', error: e, stackTrace: stack);
   }
 }

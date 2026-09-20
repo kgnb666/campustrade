@@ -9,7 +9,10 @@ import '../../services/favorite_service.dart';
 import '../../services/goods_service.dart';
 import '../../models/status_enums.dart';
 import '../../utils/api_error.dart';
+import '../../utils/app_logger.dart';
 import '../../utils/name_utils.dart';
+import '../../utils/page_controller_scope.dart';
+import '../../utils/ui_feedback.dart';
 import '../../widgets/goods_thumbnail.dart';
 
 /// 商品详情页 (图片轮播、价格、描述、卖家认证与信用分展示)
@@ -24,10 +27,11 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
   final GoodsService _goodsService = GoodsService();
   final FavoriteService _favoriteService = FavoriteService();
   final AuthController _authController = Get.find<AuthController>();
-  late final ReviewController _reviewController =
-      Get.isRegistered<ReviewController>()
-          ? Get.find<ReviewController>()
-          : Get.put(ReviewController());
+
+  /// 本页面自己的评价控制器：由路由 binding 注册、随本路由释放
+  /// （此前是全局单例，会与订单详情页的评价状态互相污染）。
+  late final PageControllerRef<ReviewController> _reviewControllerRef;
+  ReviewController get _reviewController => _reviewControllerRef.controller;
 
   GoodsDetailModel? _goods;
   bool _isLoading = true;
@@ -43,10 +47,17 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
   @override
   void initState() {
     super.initState();
+    _reviewControllerRef = PageControllerScope.acquire<ReviewController>(
+      () => ReviewController(),
+    );
     _loadDetail();
   }
 
   Future<void> _loadDetail() async {
+    // 本方法既在 initState 调用，也在 await（发布页返回、上下架）之后调用，
+    // 因此入口先确认 State 仍挂载，避免往已销毁的页面上写状态
+    if (!mounted) return;
+
     final goodsId = Get.arguments;
     if (goodsId == null) {
       Get.back();
@@ -73,7 +84,8 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
       }
     } catch (e, stack) {
       // 请求失败 => 错误态 + 重试；不再与"商品不存在"混成同一个画面
-      debugPrint('[GoodsDetailPage] _loadDetail id=$id error: $e\n$stack');
+      AppLogger.error('[GoodsDetailPage] _loadDetail id=$id error',
+          error: e, stackTrace: stack);
       if (!mounted) return;
       setState(() {
         _loadError = describeApiError(e, fallback: '商品详情加载失败');
@@ -109,21 +121,21 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
       }
 
       if (!mounted) return;
-      Get.snackbar(
+      safeSnackbar(
         '提示',
         newStatus ? '已添加至我的收藏' : '已取消收藏',
         snackPosition: SnackPosition.BOTTOM,
         duration: const Duration(seconds: 1),
       );
     } catch (e, stack) {
-      debugPrint('[GoodsDetailPage] _toggleFavorite error: $e\n$stack');
+      AppLogger.error('[GoodsDetailPage] _toggleFavorite error', error: e, stackTrace: stack);
       if (mounted) {
         setState(() {
           _isFavorite = !newStatus;
           _favoriteCount += newStatus ? -1 : 1;
           if (_favoriteCount < 0) _favoriteCount = 0;
         });
-        Get.snackbar(
+        safeSnackbar(
           '收藏失败',
           describeApiError(e, fallback: '操作失败，请重试'),
           snackPosition: SnackPosition.BOTTOM,
@@ -137,6 +149,7 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
   @override
   void dispose() {
     _pageController.dispose();
+    _reviewControllerRef.release();
     super.dispose();
   }
 
@@ -228,7 +241,7 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
           IconButton(
             icon: const Icon(Icons.share_outlined),
             onPressed: () {
-              Get.snackbar('分享', '商品链接已复制到剪贴板', snackPosition: SnackPosition.BOTTOM);
+              safeSnackbar('分享', '商品链接已复制到剪贴板', snackPosition: SnackPosition.BOTTOM);
             },
           ),
         ],
@@ -532,9 +545,9 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
                           if (!mounted) return;
                           await _loadDetail();
                         } catch (e, stack) {
-                          debugPrint('[GoodsDetailPage] 上下架失败: $e\n$stack');
+                          AppLogger.error('[GoodsDetailPage] 上下架失败', error: e, stackTrace: stack);
                           if (!mounted) return;
-                          Get.snackbar(
+                          safeSnackbar(
                             '操作失败',
                             describeApiError(e, fallback: '商品状态修改失败'),
                             snackPosition: SnackPosition.BOTTOM,
@@ -551,6 +564,7 @@ class _GoodsDetailPageState extends State<GoodsDetailPage> {
                         // 卖家本人可直接进入编辑：把商品 ID 传给发布页（其据参数切换为编辑模式）
                         final updated =
                             await Get.toNamed(AppRoutes.goodsCreate, arguments: goods.id);
+                        if (!mounted) return;
                         if (updated == true) _loadDetail();
                       },
                       child: const Text('编辑商品'),
@@ -857,18 +871,30 @@ class _CreateOrderSheetState extends State<_CreateOrderSheet> {
   late final TextEditingController _messageController;
   bool _isSubmitting = false;
 
+  /// 下单专用订单控制器（tag 区分于"我的订单"列表页实例）。
+  ///
+  /// 用独立实例的原因：共用同一个控制器时，这里创建订单失败写入的 errorMessage
+  /// 会跟着实例回到"我的订单"页面，让空列表显示成"创建订单失败"错误态。
+  late final PageControllerRef<OrderController> _orderControllerRef;
+  OrderController get _orderController => _orderControllerRef.controller;
+
   @override
   void initState() {
     super.initState();
     _locationController =
         TextEditingController(text: widget.goods.location ?? '');
     _messageController = TextEditingController();
+    _orderControllerRef = PageControllerScope.acquire<OrderController>(
+      () => OrderController(),
+      tag: OrderController.tagCreate,
+    );
   }
 
   @override
   void dispose() {
     _locationController.dispose();
     _messageController.dispose();
+    _orderControllerRef.release();
     super.dispose();
   }
 
@@ -879,31 +905,29 @@ class _CreateOrderSheetState extends State<_CreateOrderSheet> {
 
     setState(() => _isSubmitting = true);
     try {
-      final orderController = Get.isRegistered<OrderController>()
-          ? Get.find<OrderController>()
-          : Get.put(OrderController());
-
-      final newOrder = await orderController.createOrder(
+      final newOrder = await _orderController.createOrder(
         goodsId: widget.goods.id,
         meetLocation: meetLoc.isNotEmpty ? meetLoc : null,
         buyerMessage: msg.isNotEmpty ? msg : null,
       );
 
+      // 下单是长耗时操作：用户可能已经关闭抽屉并离开商品详情页，逐处判断挂载
       if (!mounted) return;
 
       if (newOrder != null) {
+        final String orderNo = newOrder.orderNo;
         Navigator.pop(context);
         Get.toNamed(AppRoutes.orderDetail, arguments: newOrder.id);
-        Get.snackbar(
+        safeSnackbar(
           '下单成功',
-          '订单 ${newOrder.orderNo} 已生成，等待卖家接单确认',
+          '订单 $orderNo 已生成，等待卖家接单确认',
           snackPosition: SnackPosition.BOTTOM,
         );
       } else {
-        Get.snackbar(
+        safeSnackbar(
           '下单失败',
-          orderController.errorMessage.value.isNotEmpty
-              ? orderController.errorMessage.value
+          _orderController.errorMessage.value.isNotEmpty
+              ? _orderController.errorMessage.value
               : '创建订单失败，请稍后重试',
           snackPosition: SnackPosition.BOTTOM,
         );

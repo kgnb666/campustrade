@@ -51,9 +51,13 @@ String describeApiError(
         break;
     }
 
-    // 3. 有状态码但无 message：把状态码带上，便于用户描述问题
+    // 3. 有状态码但无 message：把状态码带上，便于用户描述问题。
+    //    对后端新增的、语义明确的业务状态额外给一句可读解释，
+    //    避免服务端漏发 message 时用户只看到"失败（HTTP 409）"这种说不出所以然的提示。
     final int? status = error.response?.statusCode;
-    return status == null ? base : '$base（HTTP $status）';
+    if (status == null) return base;
+    final String? hint = statusHintFor(status);
+    return hint == null ? '$base（HTTP $status）' : '$base（$hint）';
   }
 
   // 非网络异常（例如服务层显式抛出的业务提示）
@@ -63,6 +67,23 @@ String describeApiError(
   }
   message = message.trim();
   return message.isEmpty ? base : message;
+}
+
+/// 无服务端 message 时的状态码兜底解释（只覆盖语义足够明确的状态）。
+///
+/// 注意：这是**兜底**文案。服务端一旦返回 message（业务错误的正常形态），
+/// [describeApiError] 的第 1 步就直接采用它，不会走到这里。
+String? statusHintFor(int status) {
+  switch (status) {
+    case 409:
+      // 本批次后端新增：校园邮箱已被他人认证 / 商品状态并发变更等冲突
+      return '与当前状态冲突，可能已被他人占用，请刷新后重试';
+    case 429:
+      // 本批次后端新增：AI 助手 10 次/分钟、50 次/天，校园邮箱 3 次/24h
+      return '操作过于频繁，请稍后再试';
+    default:
+      return null;
+  }
 }
 
 /// 服务层对外的统一异常类型。

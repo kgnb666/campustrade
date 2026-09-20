@@ -1,9 +1,11 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
+// Uint8List（图片字节）
+import 'dart:typed_data';
 import '../api/dio_client.dart';
 import '../models/category_model.dart';
 import '../models/goods_model.dart';
 import '../utils/api_error.dart';
+import '../utils/app_logger.dart';
 import '../utils/json_cast.dart';
 
 /// 商品业务接口网络服务
@@ -12,6 +14,10 @@ import '../utils/json_cast.dart';
 /// 服务层**不再**把异常吞掉返回空集合/ null，而是统一抛出 [ApiException]，
 /// 由控制器区分"请求失败(errorMessage 非空)"与"确实没有数据(空列表)"。
 /// [ApiException.message] 已是可直接展示的中文文案。
+///
+/// 可取消：列表与详情方法都接受可选的 `cancelToken`，由控制器持有并在
+/// "发起新请求 / 控制器关闭"时 `cancel()`，避免快速切分类或搜索时同时挂着
+/// 多个真实请求（只丢弃迟到响应并不节省一次往返，也不会停止后端继续处理）。
 class GoodsService {
   final Dio _dio = DioClient().dio;
 
@@ -27,9 +33,9 @@ class GoodsService {
   }
 
   /// 获取商品树形分类列表
-  Future<List<CategoryModel>> getCategories() async {
+  Future<List<CategoryModel>> getCategories({CancelToken? cancelToken}) async {
     try {
-      final response = await _dio.get('/category/list');
+      final response = await _dio.get('/category/list', cancelToken: cancelToken);
       if (response.statusCode == 200 && response.data['code'] == 200) {
         final list = response.data['data'] as List<dynamic>? ?? [];
         return list
@@ -41,7 +47,7 @@ class GoodsService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[GoodsService] getCategories error: $e');
+      AppLogger.warn('[GoodsService] getCategories error', error: e);
       throw ApiException.from(e, fallback: '分类加载失败');
     }
   }
@@ -56,6 +62,7 @@ class GoodsService {
     double? minPrice,
     double? maxPrice,
     String? conditionLevel,
+    CancelToken? cancelToken,
   }) async {
     final Map<String, dynamic> queryParams = {
       'page': page,
@@ -71,10 +78,11 @@ class GoodsService {
     }
 
     try {
-      final response = await _dio.get('/goods/list', queryParameters: queryParams);
+      final response = await _dio
+          .get('/goods/list', queryParameters: queryParams, cancelToken: cancelToken);
       return _parseGoodsPage(response);
     } catch (e) {
-      debugPrint('[GoodsService] getGoodsList page=$page error: $e');
+      AppLogger.warn('[GoodsService] getGoodsList page=$page error', error: e);
       throw ApiException.from(e, fallback: '商品列表加载失败');
     }
   }
@@ -104,9 +112,9 @@ class GoodsService {
   ///
   /// 返回 null 仅表示"服务端成功响应但没有数据"，请求失败一律抛 [ApiException]，
   /// 调用方才能把"网络断了"和"商品真的不存在"分开提示。
-  Future<GoodsDetailModel?> getGoodsDetail(String id) async {
+  Future<GoodsDetailModel?> getGoodsDetail(String id, {CancelToken? cancelToken}) async {
     try {
-      final response = await _dio.get('/goods/$id');
+      final response = await _dio.get('/goods/$id', cancelToken: cancelToken);
       if (response.statusCode == 200 && response.data['code'] == 200) {
         final data = response.data['data'];
         if (data == null) return null;
@@ -117,7 +125,7 @@ class GoodsService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[GoodsService] getGoodsDetail id=$id error: $e');
+      AppLogger.warn('[GoodsService] getGoodsDetail id=$id error', error: e);
       throw ApiException.from(e, fallback: '商品详情加载失败');
     }
   }
@@ -136,7 +144,7 @@ class GoodsService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[GoodsService] createGoods error: $e');
+      AppLogger.error('[GoodsService] createGoods error', error: e);
       throw ApiException.from(e, fallback: '发布商品失败');
     }
   }
@@ -152,7 +160,7 @@ class GoodsService {
       );
       }
     } catch (e) {
-      debugPrint('[GoodsService] updateGoods id=$id error: $e');
+      AppLogger.error('[GoodsService] updateGoods id=$id error', error: e);
       throw ApiException.from(e, fallback: '修改商品失败');
     }
   }
@@ -168,7 +176,7 @@ class GoodsService {
       );
       }
     } catch (e) {
-      debugPrint('[GoodsService] deleteGoods id=$id error: $e');
+      AppLogger.error('[GoodsService] deleteGoods id=$id error', error: e);
       throw ApiException.from(e, fallback: '删除商品失败');
     }
   }
@@ -187,15 +195,15 @@ class GoodsService {
       );
       }
     } catch (e) {
-      debugPrint('[GoodsService] updateGoodsStatus id=$id error: $e');
+      AppLogger.error('[GoodsService] updateGoodsStatus id=$id error', error: e);
       throw ApiException.from(e, fallback: '更新状态失败');
     }
   }
 
   /// 获取当前登录用户的全部商品
-  Future<List<GoodsItemModel>> getMyGoods() async {
+  Future<List<GoodsItemModel>> getMyGoods({CancelToken? cancelToken}) async {
     try {
-      final response = await _dio.get('/goods/my');
+      final response = await _dio.get('/goods/my', cancelToken: cancelToken);
       if (response.statusCode == 200 && response.data['code'] == 200) {
         final list = response.data['data'] as List<dynamic>? ?? [];
         return list
@@ -207,7 +215,7 @@ class GoodsService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[GoodsService] getMyGoods error: $e');
+      AppLogger.warn('[GoodsService] getMyGoods error', error: e);
       throw ApiException.from(e, fallback: '我的商品加载失败');
     }
   }
@@ -222,6 +230,7 @@ class GoodsService {
     String? sort,
     int page = 1,
     int size = 10,
+    CancelToken? cancelToken,
   }) async {
     final Map<String, dynamic> queryParams = {
       'page': page,
@@ -235,18 +244,19 @@ class GoodsService {
     if (sort != null && sort.isNotEmpty) queryParams['sort'] = sort;
 
     try {
-      final response = await _dio.get('/goods/search', queryParameters: queryParams);
+      final response = await _dio
+          .get('/goods/search', queryParameters: queryParams, cancelToken: cancelToken);
       return _parseGoodsPage(response);
     } catch (e) {
-      debugPrint('[GoodsService] searchGoods page=$page error: $e');
+      AppLogger.warn('[GoodsService] searchGoods page=$page error', error: e);
       throw ApiException.from(e, fallback: '搜索商品失败');
     }
   }
 
   /// 获取全站热搜词 Top 10
-  Future<List<String>> getHotSearches() async {
+  Future<List<String>> getHotSearches({CancelToken? cancelToken}) async {
     try {
-      final response = await _dio.get('/goods/search/hot');
+      final response = await _dio.get('/goods/search/hot', cancelToken: cancelToken);
       if (response.statusCode == 200 && response.data['code'] == 200) {
         final raw = response.data['data'];
         if (raw is List) {
@@ -259,15 +269,15 @@ class GoodsService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[GoodsService] getHotSearches error: $e');
+      AppLogger.warn('[GoodsService] getHotSearches error', error: e);
       throw ApiException.from(e, fallback: '热搜加载失败');
     }
   }
 
   /// 获取当前用户的最近搜索历史
-  Future<List<String>> getSearchHistory() async {
+  Future<List<String>> getSearchHistory({CancelToken? cancelToken}) async {
     try {
-      final response = await _dio.get('/goods/search/history');
+      final response = await _dio.get('/goods/search/history', cancelToken: cancelToken);
       if (response.statusCode == 200 && response.data['code'] == 200) {
         final raw = response.data['data'];
         if (raw is List) {
@@ -280,7 +290,7 @@ class GoodsService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[GoodsService] getSearchHistory error: $e');
+      AppLogger.warn('[GoodsService] getSearchHistory error', error: e);
       throw ApiException.from(e, fallback: '搜索历史加载失败');
     }
   }
@@ -301,7 +311,7 @@ class GoodsService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[GoodsService] uploadImageBytes file=$filename error: $e');
+      AppLogger.error('[GoodsService] uploadImageBytes file=$filename error', error: e);
       throw ApiException.from(e, fallback: '图片上传失败');
     }
   }

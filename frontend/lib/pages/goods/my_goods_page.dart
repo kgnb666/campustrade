@@ -4,6 +4,7 @@ import '../../controllers/goods_controller.dart';
 import '../../models/goods_model.dart';
 import '../../routes/app_routes.dart';
 import '../../models/status_enums.dart';
+import '../../utils/page_controller_scope.dart';
 import '../../widgets/goods_thumbnail.dart';
 
 /// 我的发布商品管理页面
@@ -15,12 +16,25 @@ class MyGoodsPage extends StatefulWidget {
 }
 
 class _MyGoodsPageState extends State<MyGoodsPage> {
-  final GoodsController _goodsController = Get.put(GoodsController());
+  /// "我的发布"专属实例：用 tag 与集市页区分开（两者语义完全不同），
+  /// 随本路由释放；没有 binding 时退化为自建自释放。
+  late final PageControllerRef<GoodsController> _goodsControllerRef;
+  GoodsController get _goodsController => _goodsControllerRef.controller;
 
   @override
   void initState() {
     super.initState();
+    _goodsControllerRef = PageControllerScope.acquire<GoodsController>(
+      () => GoodsController(autoLoadMarketplace: false),
+      tag: GoodsController.tagMyGoods,
+    );
     _goodsController.loadMyGoods();
+  }
+
+  @override
+  void dispose() {
+    _goodsControllerRef.release();
+    super.dispose();
   }
 
   @override

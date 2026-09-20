@@ -4,6 +4,7 @@ import '../../controllers/history_controller.dart';
 import '../../models/history_model.dart';
 import '../../routes/app_routes.dart';
 import '../../models/status_enums.dart';
+import '../../utils/page_controller_scope.dart';
 import '../../widgets/goods_thumbnail.dart';
 
 /// 浏览足迹页面
@@ -15,12 +16,18 @@ class HistoryPage extends StatefulWidget {
 }
 
 class _HistoryPageState extends State<HistoryPage> {
-  final HistoryController _controller = Get.put(HistoryController());
+  /// 本页面自己的足迹控制器：随本路由释放（理由同收藏页）
+  late final PageControllerRef<HistoryController> _controllerRef;
+  HistoryController get _controller => _controllerRef.controller;
+
   final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
+    _controllerRef = PageControllerScope.acquire<HistoryController>(
+      () => HistoryController(),
+    );
     _scrollController.addListener(_onScroll);
   }
 
@@ -34,6 +41,7 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _controllerRef.release();
     super.dispose();
   }
 

@@ -6,6 +6,7 @@ import '../models/user_model.dart';
 import '../routes/app_routes.dart';
 import '../services/storage_service.dart';
 import '../utils/api_error.dart';
+import '../utils/app_logger.dart';
 import '../utils/name_utils.dart';
 import '../utils/ui_feedback.dart';
 
@@ -31,6 +32,11 @@ class AuthController extends GetxController {
   }
 
   /// 启动时尝试从本地 SecureStorage 自动登录
+  ///
+  /// 失败时必须清空**全部**本地凭据（[StorageService.clearAll]），而不能只清 access token：
+  /// refresh token 的有效期是 7 天，若把它留下，用户会陷入"自动登录失败 → 下一次请求
+  /// 拿到 401 → 无感刷新用残留的 refresh token 静默重登成功"的诡异状态，
+  /// 表现为"明明已经退出/失效了却又自己登了回来"。
   Future<void> tryAutoLogin() async {
     final savedToken = await _storage.getToken();
     if (savedToken != null && savedToken.isNotEmpty) {
@@ -39,9 +45,10 @@ class AuthController extends GetxController {
       if (success) {
         isLoggedIn.value = true;
       } else {
-        await _storage.clearToken();
+        await _storage.clearAll();
         token.value = '';
         isLoggedIn.value = false;
+        AppLogger.warn('[AuthController] 自动登录失败，已清空全部本地凭据（含 refresh token）');
       }
     }
   }
@@ -81,6 +88,7 @@ class AuthController extends GetxController {
         safeOffAllNamed(AppRoutes.home);
         return true;
       } else {
+        AppLogger.error('[AuthController] login 业务失败: ${response.data['message']}');
         safeSnackbar('登录失败', response.data['message'] ?? '用户名或密码错误',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.red.withAlpha(40),
@@ -88,6 +96,7 @@ class AuthController extends GetxController {
         return false;
       }
     } on DioException catch (e) {
+      AppLogger.error('[AuthController] login 请求失败', error: e);
       safeSnackbar('登录异常', describeApiError(e, fallback: '用户名或密码错误'),
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
@@ -95,7 +104,7 @@ class AuthController extends GetxController {
       return false;
     } catch (e, stack) {
       // 兜底：响应解析、本地存储等非网络异常此前会静默逃逸，表现为"点击登录没反应"
-      debugPrint('[AuthController] login unexpected error: $e\n$stack');
+      AppLogger.error('[AuthController] login unexpected error', error: e, stackTrace: stack);
       safeSnackbar('登录异常', '登录失败，请稍后重试',
           snackPosition: SnackPosition.BOTTOM,
           duration: const Duration(seconds: 6),
@@ -125,6 +134,7 @@ class AuthController extends GetxController {
         safeOffNamed(AppRoutes.login);
         return true;
       } else {
+        AppLogger.error('[AuthController] register 业务失败: ${response.data['message']}');
         safeSnackbar('注册失败', response.data['message'] ?? '注册信息有误',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.red.withAlpha(40),
@@ -132,13 +142,14 @@ class AuthController extends GetxController {
         return false;
       }
     } on DioException catch (e) {
+      AppLogger.error('[AuthController] register 请求失败', error: e);
       safeSnackbar('注册异常', describeApiError(e, fallback: '注册失败，请稍后重试'),
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
           colorText: Colors.red[900]);
       return false;
     } catch (e, stack) {
-      debugPrint('[AuthController] register unexpected error: $e\n$stack');
+      AppLogger.error('[AuthController] register unexpected error', error: e, stackTrace: stack);
       safeSnackbar('注册异常', '注册失败，请稍后重试',
           snackPosition: SnackPosition.BOTTOM,
           duration: const Duration(seconds: 6),
@@ -156,7 +167,7 @@ class AuthController extends GetxController {
       await _dioClient.dio.post('/auth/logout');
     } catch (e) {
       // 服务端登出失败不影响本地登出：凭据仍会被彻底清除，仅记录日志
-      debugPrint('[AuthController] 登出接口调用失败（本地凭据仍会清除）: $e');
+      AppLogger.warn('[AuthController] 登出接口调用失败（本地凭据仍会清除）', error: e);
     }
 
     // 同步清空本地持久化的 token、refreshToken 与用户信息，避免任何残留状态泄露
@@ -174,7 +185,7 @@ class AuthController extends GetxController {
         safeOffAllNamed(AppRoutes.home);
       }
     } catch (e, stack) {
-      debugPrint('[AuthController] 登出后跳转失败: $e\n$stack');
+      AppLogger.warn('[AuthController] 登出后跳转失败', error: e, stackTrace: stack);
     }
   }
 
@@ -200,7 +211,7 @@ class AuthController extends GetxController {
       }
     } catch (e, stack) {
       // 没有 Navigator（单元测试）时跳转会失败，但不能因此中断上面的凭据清理
-      debugPrint('[AuthController] 会话过期跳转登录失败: $e\n$stack');
+      AppLogger.warn('[AuthController] 会话过期跳转登录失败', error: e, stackTrace: stack);
     }
   }
 
@@ -212,11 +223,11 @@ class AuthController extends GetxController {
         currentUser.value = UserProfileModel.fromJson(response.data['data']);
         return true;
       }
-      debugPrint('[AuthController] fetchProfile 返回非 200: ${response.data['message']}');
+      AppLogger.warn('[AuthController] fetchProfile 返回非 200: ${response.data['message']}');
       return false;
     } catch (e) {
       // 自动登录路径依赖 false 触发本地凭据清理，因此这里不向上抛，只记录
-      debugPrint('[AuthController] fetchProfile error: $e');
+      AppLogger.warn('[AuthController] fetchProfile error', error: e);
       return false;
     }
   }
@@ -239,12 +250,13 @@ class AuthController extends GetxController {
             colorText: Colors.green[900]);
         return true;
       } else {
+        AppLogger.error('[AuthController] updateProfile 业务失败: ${response.data['message']}');
         safeSnackbar('修改失败', response.data['message'] ?? '修改失败',
             snackPosition: SnackPosition.BOTTOM);
         return false;
       }
     } catch (e) {
-      debugPrint('[AuthController] updateProfile error: $e');
+      AppLogger.error('[AuthController] updateProfile error', error: e);
       safeSnackbar('修改异常', describeApiError(e, fallback: '更新资料时发生错误'),
           snackPosition: SnackPosition.BOTTOM);
       return false;
@@ -268,11 +280,11 @@ class AuthController extends GetxController {
         schoolsError.value = '';
       } else {
         schoolsError.value = '高校列表加载失败，请稍后重试';
-        debugPrint('[AuthController] loadSchools 返回非 200: ${response.data['message']}');
+        AppLogger.warn('[AuthController] loadSchools 返回非 200: ${response.data['message']}');
       }
     } catch (e) {
       schoolsError.value = describeApiError(e, fallback: '高校列表加载失败，请检查网络后重试');
-      debugPrint('[AuthController] loadSchools error: $e');
+      AppLogger.warn('[AuthController] loadSchools error', error: e);
     }
   }
 
@@ -297,6 +309,7 @@ class AuthController extends GetxController {
             colorText: Colors.blue[900]);
         return true;
       } else {
+        AppLogger.error('[AuthController] submitVerify 业务失败: ${response.data['message']}');
         safeSnackbar('申请失败', response.data['message'] ?? '信息校验未通过',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.red.withAlpha(40),
@@ -304,13 +317,15 @@ class AuthController extends GetxController {
         return false;
       }
     } on DioException catch (e) {
+      // 含后端 409（该校园邮箱已被他人认证）与 429（发起人×邮箱 3 次/24h 配额）
+      AppLogger.error('[AuthController] submitVerify 请求失败', error: e);
       safeSnackbar('申请异常', describeApiError(e, fallback: '提交失败'),
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
           colorText: Colors.red[900]);
       return false;
     } catch (e, stack) {
-      debugPrint('[AuthController] submitVerify unexpected error: $e\n$stack');
+      AppLogger.error('[AuthController] submitVerify unexpected error', error: e, stackTrace: stack);
       safeSnackbar('申请异常', '提交失败，请稍后重试',
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
@@ -339,6 +354,7 @@ class AuthController extends GetxController {
         safeOffNamed(AppRoutes.profile);
         return true;
       } else {
+        AppLogger.error('[AuthController] verifyCode 业务失败: ${response.data['message']}');
         safeSnackbar('核验失败', response.data['message'] ?? '验证码不正确',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.red.withAlpha(40),
@@ -346,13 +362,16 @@ class AuthController extends GetxController {
         return false;
       }
     } on DioException catch (e) {
+      // 后端以真实 HTTP 状态返回业务错误，其中 409 表示"该校园邮箱已被他人认证"，
+      // 文案统一由 describeApiError 取服务端 message（这里只补日志与兜底）
+      AppLogger.error('[AuthController] verifyCode 请求失败', error: e);
       safeSnackbar('核验异常', describeApiError(e, fallback: '核验失败'),
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
           colorText: Colors.red[900]);
       return false;
     } catch (e, stack) {
-      debugPrint('[AuthController] verifyCode unexpected error: $e\n$stack');
+      AppLogger.error('[AuthController] verifyCode unexpected error', error: e, stackTrace: stack);
       safeSnackbar('核验异常', '核验失败，请稍后重试',
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),

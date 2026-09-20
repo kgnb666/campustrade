@@ -9,6 +9,8 @@ import '../../widgets/ai_goods_assistant_sheet.dart';
 import '../../widgets/goods_thumbnail.dart';
 import '../../models/status_enums.dart';
 import '../../utils/api_error.dart';
+import '../../utils/app_logger.dart';
+import '../../utils/ui_feedback.dart';
 
 /// 发布闲置商品页面
 class CreateGoodsPage extends StatefulWidget {
@@ -63,6 +65,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
 
   void _checkStudentVerification() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       final user = _authController.currentUser.value;
       if (user == null || !VerifyStatus.fromCode(user.verifyStatus).isVerified) {
         showDialog(
@@ -123,7 +126,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
         }
       });
     } catch (e, stack) {
-      debugPrint('[CreateGoodsPage] _loadCategories error: $e\n$stack');
+      AppLogger.error('[CreateGoodsPage] _loadCategories error', error: e, stackTrace: stack);
       if (!mounted) return;
       setState(() {
         _categoryError = describeApiError(e, fallback: '分类加载失败，请检查网络后重试');
@@ -139,7 +142,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
       // await 之后必须重新确认 State 仍然挂载，否则在已销毁的页面上 setState/导航
       if (!mounted) return;
       if (detail == null) {
-        Get.snackbar('提示', '商品不存在或已下架，无法编辑');
+        safeSnackbar('提示', '商品不存在或已下架，无法编辑');
         Get.back();
         return;
       }
@@ -166,9 +169,10 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
       });
     } catch (e, stack) {
       // 详情拉取失败（断网/超时）不再冒充"商品不存在"：给出原因并留在页面
-      debugPrint('[CreateGoodsPage] _loadGoodsForEdit id=$goodsId error: $e\n$stack');
+      AppLogger.error('[CreateGoodsPage] _loadGoodsForEdit id=$goodsId error',
+          error: e, stackTrace: stack);
       if (!mounted) return;
-      Get.snackbar('加载失败',
+      safeSnackbar('加载失败',
           describeApiError(e, fallback: '商品详情加载失败，请检查网络后重试'),
           snackPosition: SnackPosition.BOTTOM);
     } finally {
@@ -184,7 +188,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
 
   Future<void> _pickAndUploadImage() async {
     if (_uploadedImages.length >= 9) {
-      Get.snackbar('提示', '最多可上传 9 张商品图片');
+      safeSnackbar('提示', '最多可上传 9 张商品图片');
       return;
     }
 
@@ -205,12 +209,15 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
       setState(() {
         _uploadedImages.add(url);
       });
-      Get.snackbar('成功', '图片上传成功',
+      safeSnackbar('成功', '图片上传成功',
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.green.shade600,
           colorText: Colors.white);
-    } catch (e) {
-      Get.snackbar('上传失败', describeApiError(e, fallback: '图片上传失败'),
+    } catch (e, stack) {
+      // 上传是长耗时操作：用户可能在等待期间返回上一页，提示前必须确认挂载
+      AppLogger.error('[CreateGoodsPage] _pickAndUploadImage error', error: e, stackTrace: stack);
+      if (!mounted) return;
+      safeSnackbar('上传失败', describeApiError(e, fallback: '图片上传失败'),
           snackPosition: SnackPosition.BOTTOM);
     } finally {
       if (mounted) setState(() => _isUploadingImage = false);
@@ -220,7 +227,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
   Future<void> _submitGoods() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedCategory == null) {
-      Get.snackbar('提示', '请选择商品所属分类');
+      safeSnackbar('提示', '请选择商品所属分类');
       return;
     }
 
@@ -243,7 +250,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
       if (_isEditing) {
         await _goodsService.updateGoods(_editingGoodsId!, data);
         if (!mounted) return;
-        Get.snackbar(
+        safeSnackbar(
           '修改成功',
           '商品信息已更新！',
           snackPosition: SnackPosition.BOTTOM,
@@ -253,7 +260,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
       } else {
         await _goodsService.createGoods(data);
         if (!mounted) return;
-        Get.snackbar(
+        safeSnackbar(
           '发布成功',
           '商品已进入出售状态！',
           snackPosition: SnackPosition.BOTTOM,
@@ -261,9 +268,15 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
           colorText: Colors.white,
         );
       }
+      // 提交成功才关闭页面并把"成功"结果回传给列表页（否则列表不会刷新）
       Get.back(result: true);
-    } catch (e) {
-      Get.snackbar(
+    } catch (e, stack) {
+      AppLogger.error(
+          _isEditing ? '[CreateGoodsPage] updateGoods error' : '[CreateGoodsPage] createGoods error',
+          error: e, stackTrace: stack);
+      // 上传/提交耗时期间用户可能已返回：这里同样必须先判挂载再提示
+      if (!mounted) return;
+      safeSnackbar(
         _isEditing ? '修改失败' : '发布失败',
         describeApiError(e,
             fallback: _isEditing ? '商品修改失败' : '商品发布失败'),

@@ -3,6 +3,7 @@ import 'package:get/get.dart';
 import '../../controllers/order_controller.dart';
 import '../../models/order.dart';
 import '../../routes/app_routes.dart';
+import '../../utils/page_controller_scope.dart';
 import '../../widgets/goods_thumbnail.dart';
 
 /// 订单列表浏览页面 (我的购买 / 我的出售)
@@ -16,16 +17,20 @@ class MyOrdersPage extends StatefulWidget {
 
 class _MyOrdersPageState extends State<MyOrdersPage>
     with SingleTickerProviderStateMixin {
-  late final OrderController _orderController;
+  /// "我的订单"列表页专属实例（tag 区分于订单详情页与商品详情下单），随本路由释放
+  late final PageControllerRef<OrderController> _orderControllerRef;
+  OrderController get _orderController => _orderControllerRef.controller;
+
   late final TabController _tabController;
   final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
-    _orderController = Get.isRegistered<OrderController>()
-        ? Get.find<OrderController>()
-        : Get.put(OrderController());
+    _orderControllerRef = PageControllerScope.acquire<OrderController>(
+      () => OrderController(),
+      tag: OrderController.tagMyOrders,
+    );
 
     final initialRole = _orderController.currentRole.value;
     final initialIndex = initialRole == 'SELLER' ? 1 : 0;
@@ -59,6 +64,7 @@ class _MyOrdersPageState extends State<MyOrdersPage>
   void dispose() {
     _tabController.dispose();
     _scrollController.dispose();
+    _orderControllerRef.release();
     super.dispose();
   }
 

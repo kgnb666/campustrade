@@ -1,8 +1,8 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import '../models/api_response.dart';
 import '../utils/api_error.dart';
 import '../models/order.dart';
+import '../utils/app_logger.dart';
 import 'dio_client.dart';
 
 /// 交易订单核心网络 API 接口服务
@@ -33,7 +33,7 @@ class OrderApi {
     } on DioException catch (e) {
       return _handleDioException<OrderVO>(e);
     } catch (e) {
-      debugPrint('[OrderApi] createOrder unexpected error: $e');
+      AppLogger.error('[OrderApi] createOrder unexpected error', error: e);
       return ApiResponse<OrderVO>(
         code: 500,
         message: '创建订单失败，请稍后重试',
@@ -45,11 +45,14 @@ class OrderApi {
   /// 接口2: 分页查询当前用户的订单 (我的订单)
   /// GET /api/orders/my
   /// query: role (BUYER/SELLER), status, page, size
+  /// [cancelToken] 由调用方（控制器）持有：刷新/切换筛选/离开页面时会取消在途请求，
+  /// 避免快速连点时同时挂着多个真实请求（只丢弃迟到响应并不节省一次往返）。
   Future<ApiResponse<OrderPageResult>> getMyOrders({
     String role = 'BUYER',
     String? status,
     int page = 1,
     int size = 10,
+    CancelToken? cancelToken,
   }) async {
     try {
       final Map<String, dynamic> queryParams = {
@@ -60,8 +63,8 @@ class OrderApi {
       if (status != null && status.isNotEmpty) {
         queryParams['status'] = status;
       }
-      final response =
-          await _dio.get('/orders/my', queryParameters: queryParams);
+      final response = await _dio.get('/orders/my',
+          queryParameters: queryParams, cancelToken: cancelToken);
       return _parseApiResponse<OrderPageResult>(
         response,
         (data) => OrderPageResult.fromJson(data as Map<String, dynamic>),
@@ -69,7 +72,7 @@ class OrderApi {
     } on DioException catch (e) {
       return _handleDioException<OrderPageResult>(e);
     } catch (e) {
-      debugPrint('[OrderApi] getMyOrders unexpected error: $e');
+      AppLogger.error('[OrderApi] getMyOrders unexpected error', error: e);
       return ApiResponse<OrderPageResult>(
         code: 500,
         message: '订单列表加载失败，请稍后重试',
@@ -80,9 +83,10 @@ class OrderApi {
 
   /// 接口3: 查询订单详情
   /// GET /api/orders/{id}
-  Future<ApiResponse<OrderVO>> getOrderDetail(String id) async {
+  /// [cancelToken] 见 [getMyOrders] 的说明。
+  Future<ApiResponse<OrderVO>> getOrderDetail(String id, {CancelToken? cancelToken}) async {
     try {
-      final response = await _dio.get('/orders/$id');
+      final response = await _dio.get('/orders/$id', cancelToken: cancelToken);
       return _parseApiResponse<OrderVO>(
         response,
         (data) => OrderVO.fromJson(data as Map<String, dynamic>),
@@ -90,7 +94,7 @@ class OrderApi {
     } on DioException catch (e) {
       return _handleDioException<OrderVO>(e);
     } catch (e) {
-      debugPrint('[OrderApi] getOrderDetail unexpected error: $e');
+      AppLogger.error('[OrderApi] getOrderDetail unexpected error', error: e);
       return ApiResponse<OrderVO>(
         code: 500,
         message: '订单详情加载失败，请稍后重试',
@@ -111,7 +115,7 @@ class OrderApi {
     } on DioException catch (e) {
       return _handleDioException<OrderVO>(e);
     } catch (e) {
-      debugPrint('[OrderApi] confirmOrder unexpected error: $e');
+      AppLogger.error('[OrderApi] confirmOrder unexpected error', error: e);
       return ApiResponse<OrderVO>(
         code: 500,
         message: '确认接单失败，请稍后重试',
@@ -137,7 +141,7 @@ class OrderApi {
     } on DioException catch (e) {
       return _handleDioException<OrderVO>(e);
     } catch (e) {
-      debugPrint('[OrderApi] cancelOrder unexpected error: $e');
+      AppLogger.error('[OrderApi] cancelOrder unexpected error', error: e);
       return ApiResponse<OrderVO>(
         code: 500,
         message: '取消订单失败，请稍后重试',
@@ -158,7 +162,7 @@ class OrderApi {
     } on DioException catch (e) {
       return _handleDioException<OrderVO>(e);
     } catch (e) {
-      debugPrint('[OrderApi] completeOrder unexpected error: $e');
+      AppLogger.error('[OrderApi] completeOrder unexpected error', error: e);
       return ApiResponse<OrderVO>(
         code: 500,
         message: '完成交易失败，请稍后重试',
@@ -189,7 +193,7 @@ class OrderApi {
         } catch (e, stack) {
           // 解析失败不能静默：否则 code 仍是 200、data 为 null，上层会拿服务端的
           // 'success' 当错误文案展示，用户看到"success"却不知道哪里出错。
-          debugPrint('[OrderApi] parser mapping error: $e\n$stack');
+          AppLogger.error('[OrderApi] parser mapping error', error: e, stackTrace: stack);
           return ApiResponse<T>(
             code: 500,
             message: '数据解析失败，请稍后重试',

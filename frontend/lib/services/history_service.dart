@@ -1,8 +1,8 @@
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart';
 import '../api/dio_client.dart';
 import '../models/history_model.dart';
 import '../utils/api_error.dart';
+import '../utils/app_logger.dart';
 import '../utils/json_cast.dart';
 
 /// 浏览足迹网络服务
@@ -22,12 +22,18 @@ class HistoryService {
   }
 
   /// 分页获取我的浏览历史
-  Future<Map<String, dynamic>> getHistoryList({int page = 1, int size = 20}) async {
+  ///
+  /// [cancelToken] 由控制器持有：刷新/离开页面时取消在途请求（见 [GoodsService] 的说明）。
+  Future<Map<String, dynamic>> getHistoryList({
+    int page = 1,
+    int size = 20,
+    CancelToken? cancelToken,
+  }) async {
     try {
       final response = await _dio.get('/history/list', queryParameters: {
         'page': page,
         'size': size,
-      });
+      }, cancelToken: cancelToken);
       if (response.statusCode == 200 && response.data['code'] == 200) {
         final data = response.data['data'];
         final recordsJson = data['records'] as List<dynamic>? ?? [];
@@ -46,7 +52,7 @@ class HistoryService {
         statusCode: response.statusCode,
       );
     } catch (e) {
-      debugPrint('[HistoryService] getHistoryList page=$page error: $e');
+      AppLogger.warn('[HistoryService] getHistoryList page=$page error', error: e);
       throw ApiException.from(e, fallback: '浏览足迹加载失败');
     }
   }

@@ -1,8 +1,8 @@
-import 'package:flutter/foundation.dart';
 import 'package:get/get.dart';
 import '../api/review_api.dart';
 import '../config/app_config.dart';
 import '../utils/api_error.dart';
+import '../utils/app_logger.dart';
 import '../models/api_response.dart';
 import '../models/review.dart';
 import 'auth_controller.dart';
@@ -147,7 +147,7 @@ class ReviewController extends GetxController {
         return res.data;
       }
     } catch (e) {
-      debugPrint('[ReviewController] fetchOrderReviewStatus error: $e');
+      AppLogger.warn('[ReviewController] fetchOrderReviewStatus error', error: e);
     } finally {
       loadingOrderStatus.value = false;
     }
@@ -176,7 +176,7 @@ class ReviewController extends GetxController {
         return goodsReviewsMap[goodsId]!;
       }
     } catch (e) {
-      debugPrint('[ReviewController] fetchGoodsReviews error: $e');
+      AppLogger.warn('[ReviewController] fetchGoodsReviews error', error: e);
     } finally {
       loadingGoodsReviews.value = false;
     }
@@ -204,7 +204,7 @@ class ReviewController extends GetxController {
         }
       }
     } catch (e) {
-      debugPrint('[ReviewController] fetchUserReviews error: $e');
+      AppLogger.warn('[ReviewController] fetchUserReviews error', error: e);
     } finally {
       loadingUserReviews.value = false;
     }
@@ -280,7 +280,7 @@ class ReviewController extends GetxController {
         return res;
       }
     } catch (e, stack) {
-      debugPrint('[ReviewController] submitReview error: $e\n$stack');
+      AppLogger.error('[ReviewController] submitReview error', error: e, stackTrace: stack);
       submitState.value = ReviewSubmitState.error;
       errorMessage.value = describeApiError(e, fallback: '提交评价失败，请稍后重试');
       return ApiResponse<ReviewModel>(

@@ -7,6 +7,8 @@ import '../../controllers/review_controller.dart';
 import '../../models/order.dart';
 import '../../models/review.dart';
 import '../../utils/name_utils.dart';
+import '../../utils/page_controller_scope.dart';
+import '../../utils/ui_feedback.dart';
 import '../../widgets/goods_thumbnail.dart';
 import '../review/create_review_sheet.dart';
 
@@ -20,19 +22,26 @@ class OrderDetailPage extends StatefulWidget {
 }
 
 class _OrderDetailPageState extends State<OrderDetailPage> {
-  late final OrderController _orderController;
-  late final ReviewController _reviewController;
+  /// 订单详情用**无 tag 的默认实例**：与"我的订单"列表页（tag=tagMyOrders）隔离，
+  /// 也正因为它是默认实例，评价提交后的跨控制器回刷（ReviewController -> OrderController）
+  /// 才能按类型找到它。实例由路由 binding 注册、随本路由释放。
+  late final PageControllerRef<OrderController> _orderControllerRef;
+  OrderController get _orderController => _orderControllerRef.controller;
+
+  late final PageControllerRef<ReviewController> _reviewControllerRef;
+  ReviewController get _reviewController => _reviewControllerRef.controller;
+
   String? _orderId;
 
   @override
   void initState() {
     super.initState();
-    _orderController = Get.isRegistered<OrderController>()
-        ? Get.find<OrderController>()
-        : Get.put(OrderController());
-    _reviewController = Get.isRegistered<ReviewController>()
-        ? Get.find<ReviewController>()
-        : Get.put(ReviewController());
+    _orderControllerRef = PageControllerScope.acquire<OrderController>(
+      () => OrderController(),
+    );
+    _reviewControllerRef = PageControllerScope.acquire<ReviewController>(
+      () => ReviewController(),
+    );
 
     final args = Get.arguments;
     if (args != null) {
@@ -41,8 +50,10 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
     }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       if (_orderId != null) {
         _orderController.fetchOrderDetail(_orderId!).then((_) {
+          if (!mounted) return;
           final ord = _orderController.currentOrder.value;
           if (ord != null && ord.orderStatus == OrderStatus.completed) {
             _reviewController.fetchOrderReviewStatus(ord.id);
@@ -50,6 +61,13 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         });
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _orderControllerRef.release();
+    _reviewControllerRef.release();
+    super.dispose();
   }
 
   @override
@@ -317,14 +335,17 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   /// 卖家接单确认
   Future<void> _handleConfirmOrder(OrderVO order) async {
     final success = await _orderController.confirmOrder(order.id);
+    // await 之后必须确认本 State 仍在树上：用户点完立刻返回时，
+    // 提示绝不能弹到上一个页面上（mounted 守卫 + safeSnackbar 双保险）
+    if (!mounted) return;
     if (success) {
-      Get.snackbar(
+      safeSnackbar(
         '接单成功',
         '已确认接单，请及时与买家约定线下交付',
         snackPosition: SnackPosition.BOTTOM,
       );
     } else {
-      Get.snackbar(
+      safeSnackbar(
         '接单失败',
         _orderController.errorMessage.value.isNotEmpty
             ? _orderController.errorMessage.value
@@ -354,15 +375,17 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
             onPressed: () async {
               Navigator.pop(ctx);
               final success = await _orderController.completeOrder(order.id);
+              // 弹窗关闭 + 接口返回之间用户可能已返回上一页，因此逐个 await 后都要重新确认挂载
+              if (!mounted) return;
               if (success) {
                 _reviewController.fetchOrderReviewStatus(order.id);
-                Get.snackbar(
+                safeSnackbar(
                   '交易完成',
                   '双方线下面交已达成，交易顺利结束',
                   snackPosition: SnackPosition.BOTTOM,
                 );
               } else {
-                Get.snackbar(
+                safeSnackbar(
                   '操作失败',
                   _orderController.errorMessage.value.isNotEmpty
                       ? _orderController.errorMessage.value
@@ -393,14 +416,16 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   /// 执行取消订单并给出结果提示（供取消弹窗回调）
   Future<void> _handleCancelOrder(OrderVO order, String reason) async {
     final success = await _orderController.cancelOrder(order.id, reason);
+    // 取消弹窗是先关闭再发起请求的，用户可能已经离开本页：必须先判挂载再提示
+    if (!mounted) return;
     if (success) {
-      Get.snackbar(
+      safeSnackbar(
         '订单已取消',
         '订单已成功终止并已更新流转状态',
         snackPosition: SnackPosition.BOTTOM,
       );
     } else {
-      Get.snackbar(
+      safeSnackbar(
         '取消失败',
         _orderController.errorMessage.value.isNotEmpty
             ? _orderController.errorMessage.value
@@ -1013,7 +1038,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                 InkWell(
                   onTap: () {
                     Clipboard.setData(ClipboardData(text: order.orderNo));
-                    Get.snackbar(
+                    safeSnackbar(
                       '已复制',
                       '订单号已复制到剪贴板',
                       snackPosition: SnackPosition.BOTTOM,
@@ -1528,7 +1553,7 @@ class _CancelOrderDialogState extends State<_CancelOrderDialog> {
   Future<void> _confirm() async {
     final reason = _reasonController.text.trim();
     if (reason.isEmpty) {
-      Get.snackbar(
+      safeSnackbar(
         '提示',
         '取消原因不能为空，请填写具体原因',
         snackPosition: SnackPosition.BOTTOM,
