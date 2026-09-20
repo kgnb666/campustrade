@@ -43,7 +43,7 @@ CampusTrade 是一个面向高校大学生的校园闲置二手交易平台，�
 +-------------------------------------------------------------+
 | 后端服务层 (Backend): Spring Boot 3.3.4 (Java 21)             |
 | - ORM: MyBatis-Plus 3.5.7 / 连接池: HikariCP                  |
-| - 数据库迁移: Flyway（V1..V11，schema 单一真相源）             |
+| - 数据库迁移: Flyway（V1..V12，schema 单一真相源）             |
 | - 安全: Spring Security 6 + JJWT 0.12.6                       |
 | - 邮件: spring-boot-starter-mail（校园认证验证码）             |
 +-------------------------------------------------------------+
@@ -114,11 +114,11 @@ docker compose ps
 
 ```bash
 cd backend
-mvn -B test              # 242 项；中间件由 Testcontainers 现拉现用，不碰开发库
+mvn -B test              # 255 项；中间件由 Testcontainers 现拉现用，不碰开发库（需要可用的 Docker）
 mvn spring-boot:run      # 或双击 backend/run-backend.cmd（自动加载项目根目录 .env）
 ```
 后端监听 `http://127.0.0.1:8080`，上下文路径 `/api`。
-首次启动会由 Flyway 从空库执行 V1..V11 建出完整结构（详见第五节）。
+首次启动会由 Flyway 从空库执行全部迁移（V1..V12）建出完整结构（详见第五节）。
 
 ### 3. 前端应用启动
 
@@ -126,7 +126,7 @@ mvn spring-boot:run      # 或双击 backend/run-backend.cmd（自动加载项�
 cd frontend
 flutter pub get
 flutter analyze          # 期望 0 issue
-flutter test             # 142 项
+flutter test             # 176 项
 flutter run -d chrome    # 或双击 frontend/run-frontend.cmd run -d chrome
 ```
 Web 端 API 基址默认 `http://127.0.0.1:8080/api`（`lib/config/app_config.dart`），
@@ -138,7 +138,7 @@ Web 端 API 基址默认 `http://127.0.0.1:8080/api`（`lib/config/app_config.da
 
 ### 5.1 单一真相源
 
-- **业务表结构唯一来源**：`backend/src/main/resources/db/migration/V1..V11__*.sql`。
+- **业务表结构唯一来源**：`backend/src/main/resources/db/migration/V1..V12__*.sql`。
 - `docker/postgres/init.sql`：只做 `CREATE SCHEMA IF NOT EXISTS campus_trade`、授权与默认 `search_path`，
   **不含任何业务建表语句**。它仅在数据卷首次初始化时执行一次；删掉它，Flyway 也会自行创建 schema。
   历史上这里曾复制过一份与 Flyway 重复的建表语句，已随阶段 8 移除（重复定义必然漂移）。
@@ -159,10 +159,14 @@ Web 端 API 基址默认 `http://127.0.0.1:8080/api`（`lib/config/app_config.da
 | V9 | 新增高校（广西师范大学）种子数据 |
 | V10 | 数据一致性约束加固 |
 | V11 | 性能索引 |
+| V12 | 校园邮箱唯一性（`SUCCESS` 部分唯一索引）与 12 条补齐外键（均 `NOT VALID`） |
 
-> 空库验证结论（阶段 8 实测）：在独立 compose project + 独立端口的全新实例上，
+> 空库验证结论（阶段 8 实测，当时迁移到 V11）：在独立 compose project + 独立端口的全新实例上，
 > Flyway 从 0 张表一路执行到 V11，`flyway_schema_history` 记录 V1..V11 **全部 success**，
 > 建出 18 张表（17 张业务表 + 迁移历史表）与 63 个索引，随后 `GET /api/school/list` 返回 200。
+> 批次 1 新增的 V12（`student_verify` 部分唯一索引 + 12 条 `NOT VALID` 外键）同样在 Testcontainers
+> 全新库与开发库上实测 success；`NOT VALID` 的语义与历史孤儿行收口步骤见根 README 的
+> 「约束与历史脏数据」与「迁移后的数据清理」两节。
 
 ---
 
@@ -214,7 +218,7 @@ CampusTrade/
 │       │   ├── application-prod.yml     # 生产覆盖（敏感项无默认值、日志收敛）
 │       │   ├── logback-spring.xml        # 控制台 + 按天滚动文件（UTF-8）
 │       │   ├── META-INF/spring.factories # 注册生产敏感配置守卫（EnvironmentPostProcessor）
-│       │   └── db/migration/V1..V11__*.sql # 建表唯一真相源
+│       │   └── db/migration/V1..V12__*.sql # 建表唯一真相源
 │       └── test/
 │           ├── java/com/campustrade/    # 测试用例 + support/（Testcontainers 装配）
 │           └── resources/               # application-test.yml、spring.factories 等
@@ -230,25 +234,45 @@ CampusTrade/
 │   │   ├── services/                   # 网络、存储、登录态等全局服务
 │   │   ├── utils/ widgets/             # 工具与通用组件
 │   │   └── main.dart
-│   ├── test/                           # Widget/单元测试（142 项）
+│   ├── test/                           # Widget/单元测试（176 项）
 │   └── web/                            # Web 入口（index.html、manifest、icons）
 ├── docker/
 │   └── postgres/init.sql               # 仅 CREATE SCHEMA + 授权（无业务建表语句）
 ├── docs/                               # 设计与阶段报告
 │   ├── README.md                       # 本文件
-│   ├── final-audit/                    # 阶段终审报告
-│   └── stage3*/ stage4/ stage5/ stage6/ # 各阶段过程报告
+│   ├── final-audit/                    # 阶段终审报告（含"历史报告（已过时）"抬头）+ 终审修复报告
+│   └── stage3*/ stage4/ stage5/ stage6/ stage7/ stage8/ # 各阶段过程报告
 ├── scripts/
 │   ├── toolchain.ps1                   # 工具链解析（环境变量 → PATH → 报错指引）
-│   └── quality-gate.ps1                # 质量门禁唯一入口（后端测试 + 前端分析 + 前端测试）
+│   └── quality-gate.ps1                # 质量门禁唯一入口（Docker 前置检查 + 后端测试 + 前端分析 + 前端测试）
 ├── .env.example                        # 环境变量模板（占位符，无可用凭据）
 ├── .env.tools                          # （本机私有，已 git-ignore）工具链路径
+├── CHANGELOG.md                        # 变更历史（按时间倒序，含各阶段日期与提交短 hash）
+├── CONTRIBUTING.md                     # 参与开发约定（环境 / 门禁 / 编码 / 迁移 / 提交风格）
 ├── docker-compose.yml                  # 本地开发编排（127.0.0.1 + Redis 口令 + 日志轮转）
 ├── docker-compose.prod.yml             # 生产编排（无中间件端口 + healthcheck 依赖 + 固定 tag）
 ├── start.bat / start.ps1               # 一键启动（.bat 纯 ASCII 转发器）
 ├── stop.bat / stop.ps1                 # 一键停止
 └── README.md                           # 项目根说明（快速开始 / 端口 / 变量清单 / 门禁 / 生产部署）
 ```
+
+---
+
+### 7.1 阶段报告索引
+
+| 阶段 | 目录 | 主要报告 | 提交 |
+| :--- | :--- | :--- | :--- |
+| Stage 1 | （见 `final-audit/`） | 工程地基与可观测性 | `769aca3` |
+| Stage 2 | （见 `final-audit/`） | 认证与令牌安全加固 | `918c503` |
+| Stage 3 | `stage3_*_report.md` | 校园认证可信化（A–F 系列报告） | `24edcb9` |
+| Stage 4 | `stage4/` | 数据一致性与不变式（A / B1 / B2 / C / D 系列 + 领域设计） | `3b7891a` |
+| Stage 5 | `stage5/` | 接口契约与领域模型收敛（A–F 系列） | `7250889` |
+| Stage 6 | `stage6/` | 前端稳定性与错误处理（A–D 系列） | `a9ea6a2` |
+| Stage 7 | `stage7/` | 性能优化：索引、检索转义、N+1 消除、前端体验 | `51ff667` |
+| Stage 8 | `stage8/` | 生产交付与文档校正 | `0669c3c` |
+| 终审 | `final-audit/` | 7 份审计报告（均带"历史报告，结论已过时"抬头）+ 终审修复 / 批次 1 / 批次 2 报告 | `45ce200` / `afa595d` / `d740cb7` |
+
+> 逐条变更、验证结论与测试项数变化见根目录 [CHANGELOG.md](../CHANGELOG.md)。
 
 ---
 
@@ -259,7 +283,15 @@ CampusTrade/
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/quality-gate.ps1
 .\start.ps1 -Mode 6     # 同一入口（选项 6 直接调用上面的脚本）
 
-# CI：.github/workflows/ci.yml（push/PR 触发，后端 + 前端两个 job）
+# 单项（不需要 Docker）：-Only analyze / -Only flutter-test
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/quality-gate.ps1 -Only analyze
+
+# CI：.github/workflows/ci.yml（push/PR 触发，后端 + 前端两个 job；命令与本地门禁一致）
 ```
 
-**基线（阶段 8 实测）**：后端 `mvn -B test` 242 项全绿、`flutter analyze` 0 issue、`flutter test` 142 项全绿。
+门禁在跑测试前会先检查 Docker（后端测试的 PostgreSQL / Redis / MinIO 由 Testcontainers 现拉现用），
+不可用时打印中文原因与启动方法并以非 0 退出；因此 `JWT_SECRET` 等环境变量既不需要在本地导出，
+也不需要在 CI 注入（测试自带随机密钥，见 `TestContainersConfig`）。
+
+**基线（批次 2 实测）**：后端 `mvn -B test` **255 项**全绿、`flutter analyze` 0 issue、`flutter test` **176 项**全绿。
+（阶段 8 交付时为 242 / 142；测试项数变化见 [CHANGELOG.md](../CHANGELOG.md)。）

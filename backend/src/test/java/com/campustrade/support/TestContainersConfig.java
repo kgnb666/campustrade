@@ -40,7 +40,8 @@ import java.util.UUID;
  * </ul>
  *
  * <h2>迁移脚本无需改动</h2>
- * {@code db/migration/V1..V9} 的 SQL 里硬编码了 {@code campus_trade.} schema 前缀。容器内的
+ * {@code db/migration} 下的 SQL 里硬编码了 {@code campus_trade.} schema 前缀（这里刻意不写
+ * "V1..VX" 这样的区间：迁移会持续增加，写死具体版本号必然过时）。容器内的
  * PostgreSQL 是全新的空实例，Flyway（主配置 {@code spring.flyway.schemas=campus_trade}）会在其中
  * 正常创建 {@code campus_trade} schema 并建表，因此迁移脚本保持原样即可。
  *
@@ -51,7 +52,8 @@ import java.util.UUID;
  *       作为 URL 参数带上——{@code CampusTradeApplicationTests} 断言 {@code current_schema()}
  *       必须是 {@code campus_trade}，与开发库的 URL 形态保持一致。容器启动时还会先执行
  *       {@code testcontainers-postgres-init.sql} 预建 schema（原因见该脚本注释）。</li>
- *   <li><b>Redis</b>：{@code GenericContainer("redis:7")} + {@code @ServiceConnection(name = "redis")}
+ *   <li><b>Redis</b>：{@code GenericContainer(REDIS_IMAGE)}（见下方镜像常量）+
+ *       {@code @ServiceConnection(name = "redis")}
  *       （Boot 内置 {@code RedisContainerConnectionDetailsFactory}）。名字必须显式写成 "redis"，
  *       原因见 {@link #REDIS} 的注释。</li>
  *   <li><b>MinIO</b>：Boot 没有内置的 MinIO service connection，改为动态注入
@@ -90,6 +92,17 @@ public class TestContainersConfig {
     private static final String POSTGRES_INIT_SCRIPT = "testcontainers-postgres-init.sql";
 
     /**
+     * 三类测试容器的镜像一律固定到具体版本（不用 {@code latest}）：测试失败应当来自代码，
+     * 而不是"上游镜像今天更新了"。
+     *
+     * <p>这些 tag 与 {@code docker-compose.yml}（开发编排）保持一致，即"测试跑的就是开发在跑的
+     * 中间件版本"；升级时两者一起改，升级动作是显式的（参见 docker-compose.yml 顶部说明）。</p>
+     */
+    private static final String POSTGRES_IMAGE = "postgres:16.15";
+    private static final String REDIS_IMAGE = "redis:7.4.11";
+    private static final String MINIO_IMAGE = "minio/minio:RELEASE.2024-10-13T13-34-11Z";
+
+    /**
      * 测试用 JWT 密钥：运行时随机生成（两段 UUID 拼成 64 位十六进制 = 64 字节，远超 32 字节下限）。
      *
      * <p>后端已取消一切默认密钥并做启动期 fail-fast 校验，因此测试必须自带密钥；
@@ -107,7 +120,7 @@ public class TestContainersConfig {
      * 若让 Flyway 自己建 schema，迁移历史里会多出一条 version 为 NULL 的记录，破坏现有断言。
      */
     private static final PostgreSQLContainer<?> POSTGRES =
-            new PostgreSQLContainer<>(DockerImageName.parse("postgres:16"))
+            new PostgreSQLContainer<>(DockerImageName.parse(POSTGRES_IMAGE))
                     .withDatabaseName("campustrade")
                     .withUsername("campustrade")
                     .withPassword(POSTGRES_PASSWORD)
@@ -123,7 +136,7 @@ public class TestContainersConfig {
      * 另外必须显式暴露 6379：连接信息取的是 {@code getFirstMappedPort()}。
      */
     private static final GenericContainer<?> REDIS =
-            new GenericContainer<>(DockerImageName.parse("redis:7"))
+            new GenericContainer<>(DockerImageName.parse(REDIS_IMAGE))
                     .withExposedPorts(REDIS_PORT);
 
     /**
@@ -131,7 +144,7 @@ public class TestContainersConfig {
      * 就绪探针使用 MinIO 自带的存活检查端点 /minio/health/live。
      */
     private static final GenericContainer<?> MINIO =
-            new GenericContainer<>(DockerImageName.parse("minio/minio:latest"))
+            new GenericContainer<>(DockerImageName.parse(MINIO_IMAGE))
                     .withCommand("server /data")
                     .withEnv("MINIO_ROOT_USER", MINIO_ACCESS_KEY)
                     .withEnv("MINIO_ROOT_PASSWORD", MINIO_SECRET_KEY)

@@ -10,7 +10,7 @@ CampusTrade 的 Flutter 多端客户端（Web / Android / iOS / Desktop）。
 ```bash
 flutter pub get
 flutter analyze                 # 期望 0 issue
-flutter test                    # 142 项
+flutter test                    # 176 项
 flutter run -d chrome           # Web 调试（推荐，快速验证）
 flutter run -d windows          # Windows 桌面端
 ```

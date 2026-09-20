@@ -2,9 +2,10 @@
 #  测试环境覆盖配置（profile: test）
 #
 #  基础设施由 Testcontainers 提供，全部是"每个测试 JVM 拉起的全新一次性容器"：
-#    - PostgreSQL : postgres:16，全新实例 + Flyway 从 V1 迁移到 V9（干净库）
-#    - Redis      : redis:7
-#    - MinIO      : minio/minio，测试桶 campustrade-test
+#    - PostgreSQL : postgres:16.15，全新实例 + Flyway 从空库执行全部迁移（干净库）
+#    - Redis      : redis:7.4.11
+#    - MinIO      : minio/minio:RELEASE.2024-10-13T13-34-11Z，测试桶 campustrade-test
+#  （镜像 tag 固定，与 docker-compose.yml 一致；不写死"迁移到第几版"这类会过时的版本区间。）
 #  端口在运行时随机分配，所以 datasource / redis / flyway / mybatis-plus schema 等连接类配置
 #  一律不在这里写死，而是由 com.campustrade.support.TestContainersConfig 在启动容器后自动注入
 #  （详见该类顶部注释）。

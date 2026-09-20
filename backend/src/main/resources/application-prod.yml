@@ -59,7 +59,7 @@ spring:
   flyway:
     # 生产禁止自动 baseline：一个"非空且没有 flyway_schema_history"的库意味着
     # 库结构来路不明（手工建表 / 从别处拷贝），此时必须人工确认，
-    # 而不是给它打个 version=0 的基线再把 V1..V11 跑一遍。
+    # 而不是给它打个 version=0 的基线再把全部迁移跑一遍。
     baseline-on-migrate: false
     validate-on-migrate: true
 

@@ -14,6 +14,18 @@
 #   4. 健康检查：探活使用公开接口 GET /api/school/list（无需认证），
 #      与 docker-compose.prod.yml 的 healthcheck / depends_on 配合；
 #   5. 不使用 `latest`：基础镜像固定到具体版本号（补丁级固定），升级必须显式改本文件。
+#      运行阶段镜像固定为 `eclipse-temurin:21.0.12_8-jre-alpine-3.24`（此前是浮动的
+#      `21-jre-alpine`）：
+#        - 版本号来源：Docker Hub 官方镜像页 https://hub.docker.com/_/eclipse-temurin 的
+#          Tags 页（或用命令 `docker buildx imagetools inspect eclipse-temurin:21-jre-alpine`
+#          查"浮动 tag 当下指向哪个具体版本"）；也可在本地用 `docker images` 核对已拉取的版本。
+#        - tag 结构：`<JDK 补丁>_<build>-jre-alpine-<Alpine 小版本>`，即 JDK 补丁号与
+#          Alpine 小版本**都**固定，避免上游发布新补丁时"昨天还好、今天构建结果就变了"。
+#        - 该 tag 当前的 manifest list digest：
+#          sha256:1a29e1fe337eb28b5bec30f0ee8ed29f0ff80ab6f75dcf9313efe82911065a52
+#          （digest 是比 tag 更硬的锚；如何记录与固化 digest 见 README"生产部署步骤"一节。)
+#        - 构建阶段 `maven:3.9.16-eclipse-temurin-21` 已固定在 Maven 补丁版本 3.9.16，
+#          故此处保持不变。
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -23,10 +35,18 @@ FROM maven:3.9.16-eclipse-temurin-21 AS build
 
 WORKDIR /workspace
 
-# 先只拷 pom.xml 再下载依赖：源码改动不会让依赖层缓存失效
+# 先只拷 pom.xml 再下载依赖：源码改动不会让依赖层缓存失效。
 COPY pom.xml ./
+
+# 这里刻意**不加** `|| true`：那会把"依赖解析失败"静默吞掉，让构建在缓存层"假装成功"，
+# 真正的问题推迟到下面的 package 阶段才爆出来（错误信息离根因很远）。
+# 若某天 mvn 3.9.16 的 dependency:go-offline 确实无法离线解析某个插件，
+# 正确做法是显式修正/排除该依赖，而不是用 `|| true` 掩盖它。
+# 耗时说明：本步骤是"把依赖全量解析并拉到本地仓库"，冷缓存下明显慢于后续步骤
+# （整份依赖树解析是分钟级）；下面的 `--mount=type=cache,target=/root/.m2` 就是为了让
+# 本步骤与 package 步骤复用同一个 ~/.m2，第二次构建起不必重新下载。
 RUN --mount=type=cache,target=/root/.m2 \
-    mvn -B -ntp -DskipTests dependency:go-offline || true
+    mvn -B -ntp -DskipTests dependency:go-offline
 
 # 再拷源码并打包（跳过测试：CI/质量门禁已跑过 mvn -B test，镜像构建不再重复）
 COPY src ./src
@@ -37,7 +57,7 @@ RUN --mount=type=cache,target=/root/.m2 \
 # ------------------------------------------------------------------------------
 # 阶段 2：运行
 # ------------------------------------------------------------------------------
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:21.0.12_8-jre-alpine-3.24
 
 # wget 来自 busybox，供 HEALTHCHECK 使用；tzdata 让日志/时间字段按东八区输出
 RUN apk add --no-cache tzdata \

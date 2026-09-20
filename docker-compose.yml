@@ -10,7 +10,8 @@
 #            缺项时 compose 会直接报错退出（下方 ${VAR:?…} 语法），
 #            而不是静默使用一个弱口令把库跑起来。
 #
-#  业务表结构不在本文件职责内：由后端启动时的 Flyway 迁移（V1..V11）创建。
+#  业务表结构不在本文件职责内：由后端启动时的 Flyway 迁移创建
+#  （迁移脚本见 backend/src/main/resources/db/migration/，注释里不写死版本区间）。
 #  docker/postgres/init.sql 只负责建 campus_trade schema 与授权。
 #
 #  镜像版本一律固定到具体 tag（不用 latest）：中间件镜像偷偷升级是"昨天还好、

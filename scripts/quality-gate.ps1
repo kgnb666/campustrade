@@ -8,7 +8,10 @@
 #   2. 工具链解析统一走 scripts\toolchain.ps1（环境变量 → PATH → 明确报错指引），
 #      不写死任何盘符；也可用项目根目录的 .env.tools（git-ignored）持久化工具链位置；
 #   3. 每个外部命令都检查退出码：任一步失败 → 提示具体是哪一步 → exit 1；
-#   4. 本文件为 UTF-8 with BOM，请勿转成其它编码（PowerShell 5.1 依赖 BOM 正确读取中文）。
+#   4. 本文件为 UTF-8 with BOM，请勿转成其它编码（PowerShell 5.1 依赖 BOM 正确读取中文）；
+#   5. 后端测试的中间件（PostgreSQL / Redis / MinIO）由 Testcontainers 在测试 JVM 内现拉现用，
+#      因此开跑前必须先确认 Docker 可用（复用 toolchain.ps1 的 Test-DockerAvailable）：
+#      不可用时在这里就给中文提示并非 0 退出，而不是让 mvn test 抛一堆英文异常到日志里。
 # ==============================================================================
 [CmdletBinding()]
 param(
@@ -58,6 +61,45 @@ if ($envFailures.Count -gt 0) {
 $runBackend = ($Only -eq "" -or $Only -eq "backend")
 $runAnalyze = ($Only -eq "" -or $Only -eq "analyze")
 $runFlutterTest = ($Only -eq "" -or $Only -eq "flutter-test")
+
+# ---------------------------------------------------------------------------
+# 0.2 中间件依赖检查：后端测试需要可用的 Docker（Testcontainers）
+#
+# 为什么需要：测试用的 PostgreSQL 16 / Redis 7 / MinIO 不是外部服务，而是
+#   com.campustrade.support.TestContainersConfig 在测试 JVM 内用 Testcontainers
+#   拉起的"一次性容器"。Docker CLI 或 daemon 不可用时，mvn test 会在启动容器阶段
+#   抛出英文异常（典型信息：Could not find a valid Docker environment / docker info failed），
+#   报错位置离根因很远。所以在跑测试之前先检查，并明确说清"为什么"和"怎么办"。
+#
+# 为什么只在 runBackend 时检查：flutter analyze / flutter test 不需要 Docker，
+#   `-Only analyze`、`-Only flutter-test` 在没有 Docker 的机器上照样应当可用。
+# ---------------------------------------------------------------------------
+if ($runBackend) {
+    $dockerCmd = Resolve-DockerCmd
+    if (-not $dockerCmd -or -not (Test-DockerAvailable -DockerCmd $dockerCmd)) {
+        Write-Host "[失败] 后端测试需要 Docker，但当前 Docker 不可用。" -ForegroundColor Red
+        if (-not $dockerCmd) {
+            Write-Host "       当前解析结果：未找到 docker 命令（未安装，或不在 PATH 中）。" -ForegroundColor Red
+        } else {
+            Write-Host "       当前解析结果：docker 命令存在（$dockerCmd），但 docker info 未通过。" -ForegroundColor Red
+            Write-Host "       即 Docker CLI 装好了，Docker 引擎（daemon）没在跑，或当前用户无权访问它。" -ForegroundColor Red
+        }
+        Write-Host "       为什么需要：后端测试的 PostgreSQL / Redis / MinIO 由 Testcontainers 在测试 JVM 内" -ForegroundColor Red
+        Write-Host "       现拉现用（backend/src/test/java/com/campustrade/support/TestContainersConfig.java），" -ForegroundColor Red
+        Write-Host "       没有可用的 Docker 时 mvn test 会在启动容器阶段失败。" -ForegroundColor Red
+        Write-Host "       怎么办（任选其一）：" -ForegroundColor Yellow
+        Write-Host "         1) 启动 Docker，再重跑本门禁：" -ForegroundColor Yellow
+        Write-Host "            Windows：开始菜单启动 Docker Desktop，等托盘鲸鱼图标变为 Running（首次启动约 1 分钟）" -ForegroundColor Gray
+        Write-Host "            Linux  ：sudo systemctl start docker" -ForegroundColor Gray
+        Write-Host "            自检    ：docker info            （退出码 0 = 可用）" -ForegroundColor Gray
+        Write-Host "         2) 只想跑不需要 Docker 的两项（后端测试会被跳过）：" -ForegroundColor Yellow
+        Write-Host "            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/quality-gate.ps1 -Only analyze" -ForegroundColor Gray
+        Write-Host "            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/quality-gate.ps1 -Only flutter-test" -ForegroundColor Gray
+        exit 1
+    }
+    Write-Host "[通过] Docker 可用：$dockerCmd（后端测试的中间件将由 Testcontainers 现拉现用）" -ForegroundColor Green
+    Write-Host ""
+}
 
 $backendCode = 0
 $analyzeCode = 0

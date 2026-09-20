@@ -8,7 +8,7 @@
 --   2. 把该 schema 的权限授予当前连接用户（即 POSTGRES_USER，不写死用户名）。
 --
 -- 业务表结构（表 / 索引 / 约束 / 种子数据）的唯一真相源是 Flyway 迁移：
---   backend/src/main/resources/db/migration/V1..V11__*.sql
+--   backend/src/main/resources/db/migration/（按版本号递增，不在此处写死区间）
 -- 历史上这里曾经复制过一份建表语句（与 Flyway 重复），导致同一张表出现两个
 -- 互相漂移的定义（例如 user_credit.completed_count 只在这份脚本里存在过）。
 -- 现在起唯一职责交给 Flyway：本文件即使被删掉也不影响新建库，

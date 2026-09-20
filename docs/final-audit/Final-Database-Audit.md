@@ -7,7 +7,7 @@
 > 当前状态请以以下为准：
 > - `README.md` / `docs/README.md`（已校正的阶段、端口、变量、门禁与部署说明）
 > - Stage 1–8 的提交记录（工程地基 → 认证安全 → 校园认证 → 数据一致性 → 契约收敛 → 前端稳定性 → 性能 → 生产交付）
-> - 测试基线：**后端 242 项、前端 142 项**
+> - 测试基线：**后端 255 项、前端 176 项**（阶段 8 时为 242 / 142；见根目录 `CHANGELOG.md`）
 >
 > 修复过程与结论见同目录 `Stage-Fix-*.md`。
 
@@ -107,9 +107,12 @@
 且该"双真相源"本身就是当时的隐患：
 
 - 现状：`docker/postgres/init.sql` 只保留 `CREATE SCHEMA` 与授权，**不再包含任何建表语句**；
-  建表唯一职责已交给 Flyway（迁移现为 **V1–V11**）。
+  建表唯一职责已交给 Flyway（撰写本条时为 V1–V11；批次 1 之后新增 V12，实际清单以
+  `backend/src/main/resources/db/migration/` 为准）。
 - 理由：两处定义并存时，全新环境由 init.sql 建表、Flyway 因 `CREATE TABLE IF NOT EXISTS` 静默跳过，
   一旦漂移就会出现运行期缺列且无人发现。
 - 验证：用独立 compose project 起全新库，Flyway 从空 schema 建出 18 张表、`flyway_schema_history` 记录
-  V1–V11 全部 success、接口可用（详见 Stage 8 提交信息）。
-- 另：本文中的测试计数（189 项）亦已过期，当前为后端 242 项 / 前端 142 项。
+  V1–V11 全部 success、接口可用（详见 Stage 8 提交信息）。批次 1 新增的 V12 亦已在 Testcontainers
+  全新库与开发库实测 success。
+- 另：本文中的测试计数（189 项）亦已过期，当前为后端 **255** 项 / 前端 **176** 项
+  （阶段 8 时为 242 / 142，此后终审修复与批次 1/2 继续增加，见根目录 `CHANGELOG.md`）。

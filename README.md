@@ -6,7 +6,9 @@
 
 ## 快速导航
 
-- **项目阶段**：Stage 8（生产交付与文档校正）—— 阶段 1–8 已完成
+- **项目阶段**：Stage 8（生产交付与文档校正）已完成 —— 阶段 1–8 + 终审修复 + 批次 1/2 收尾全部落地
+- **变更历史**：[CHANGELOG.md](CHANGELOG.md)
+- **参与开发**：[CONTRIBUTING.md](CONTRIBUTING.md)（环境准备 / 门禁命令 / 编码与迁移约定 / 提交风格）
 - **架构文档**：[docs/README.md](docs/README.md)
 - **环境配置模板**：[.env.example](.env.example)
 - **开发编排**：[docker-compose.yml](docker-compose.yml)（本机开发）
@@ -225,15 +227,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/quality-gate.ps1
 .\start.ps1 -Mode 6
 
 # 单项执行
-cd backend  && mvn -B test          # 242 项（Testcontainers 自带 PG/Redis/MinIO，不碰开发库）
+cd backend  && mvn -B test          # 255 项（Testcontainers 自带 PG/Redis/MinIO，不碰开发库；需要可用的 Docker）
 cd frontend && flutter analyze      # 期望 0 issue
-cd frontend && flutter test         # 142 项
+cd frontend && flutter test         # 176 项
 ```
 
-**当前基线（阶段 8 交付时实测）**：后端 `mvn -B test` 242 项全绿；`flutter analyze` 0 issue；`flutter test` 142 项全绿。
+**当前基线（批次 2 交付时实测）**：后端 `mvn -B test` 255 项全绿；`flutter analyze` 0 issue；`flutter test` 176 项全绿。
+各阶段的测试规模变化（189 → 242 → 255 / 142 → 176）见 [CHANGELOG.md](CHANGELOG.md)。
 
+> **门禁前置检查**：`scripts/quality-gate.ps1` 在跑测试前会先确认 Docker 可用
+> （复用 `scripts/toolchain.ps1` 的 `Test-DockerAvailable`），不可用时打印中文原因与启动方法并以非 0 退出，
+> 不会让 `mvn test` 把英文异常抛进日志。只跑前端两项时不需要 Docker：
+> `-Only analyze` / `-Only flutter-test` 会跳过这项检查。
+>
 > 后端测试的中间件由 Testcontainers 在测试 JVM 内现拉现用（`com.campustrade.support.TestContainersConfig`），
-> 因此 `mvn -B test` **不会**读写 `campustrade_*` 开发数据卷。
+> 因此 `mvn -B test` **不会**读写 `campustrade_*` 开发数据卷；容器镜像 tag 已固定
+> （`postgres:16.15` / `redis:7.4.11` / `minio/minio:RELEASE.2024-10-13T13-34-11Z`，与 `docker-compose.yml` 一致）。
 > 同理，`scripts/quality-gate.ps1` 刻意**不加载** `.env`：若把 `.env` 的 `SPRING_DATA_REDIS_PASSWORD`
 > 导出到进程环境，测试会去给一个"没设口令的临时 Redis"发 AUTH 而失败。
 
@@ -245,7 +254,7 @@ cd frontend && flutter test         # 142 项
   后端启动时自动执行（`spring.flyway.*`），从空库可一路建出完整结构。
 - `docker/postgres/init.sql` **只负责** `CREATE SCHEMA campus_trade` 与授权，**不含任何业务建表语句**。
   它仅在数据卷首次初始化时执行一次，即使删掉也不影响新环境（Flyway 会自行创建 schema）。
-  （阶段 8 起移除了原先与 V1–V11 重复的那份建表语句副本——同一张表两份定义必然漂移。）
+  （阶段 8 起移除了原先与迁移重复的那份建表语句副本——同一张表两份定义必然漂移。）
 - 生产 profile 下 `spring.flyway.baseline-on-migrate: false`：库结构来路不明时宁可启动失败，也不自动打基线。
 
 ### 约束与历史脏数据（NOT VALID 外键）
@@ -312,7 +321,16 @@ docker compose -f docker-compose.prod.yml --env-file /etc/campustrade/prod.env u
 ### 2.1 迁移后的数据清理（V10 / V12 的 NOT VALID 外键）
 
 `V1..V12` 在应用启动时自动执行。**其中 V10/V12 的 14 条外键全部是 `NOT VALID`：它们只约束新数据，
-历史孤儿行不会被自动校验，也不会被自动删除**（迁移绝不删改业务数据）。因此上线前/上线后请执行一次：
+历史孤儿行不会被自动校验，也不会被自动删除**（迁移绝不删改业务数据）。
+
+> **在线 DDL 与锁语义（V10 的两条外键就是这个取舍）**
+> `ADD CONSTRAINT ... FOREIGN KEY`（不带 `NOT VALID`）会**扫描全表校验每一行**，并持有
+> `ACCESS EXCLUSIVE` 锁 —— 阻塞该表所有读写，大表上是分钟级；V10 的 `review.order_id` /
+> `review.goods_id` 因此写成 `NOT VALID`：只登记定义、锁只持续毫秒级，且**只约束新行**。
+> 而 `VALIDATE CONSTRAINT` 只取 `SHARE UPDATE EXCLUSIVE` 锁、**不阻塞读写，可以在线执行**。
+> 更细的说明见下文「Schema 单一真相源 → 约束与历史脏数据（NOT VALID 外键）」。
+
+因此上线前/上线后请执行一次：
 
 ```bash
 # 只读盘点（可直接执行，不修改任何数据）
@@ -339,6 +357,73 @@ docker exec -i <postgres容器> psql -U campustrade -d campustrade \
 - 若前面有 Nginx / TLB / Ingress：必须把代理地址写进 `SECURITY_TRUSTED_PROXIES`
   （例如 `10.0.0.0/8,172.17.0.0/16`），否则所有用户会共用"代理的 IP"这一个限流维度，
   IP 维度的登录失败锁定会误伤全站；**绝不能写 `0.0.0.0/0`**（等于又变成无条件采信客户端头部）。
+
+### 2.3 上线前必须执行：清理 Redis 中的历史明文 refresh token
+
+**为什么**：refresh token 现在只以 **SHA-256 摘要**存 Redis（键 `jwt:refresh:{userId}`，值是 64 位十六进制；
+见 `RedisKeyConstants.JWT_REFRESH_PREFIX` 与 `TokenHashUtils`）。但阶段 2 之前的旧代码把**令牌明文**
+写在同一个键里，这些历史键：
+
+- **不会被新代码复用**：校验逻辑拿"传入令牌的 SHA-256"去比对，明文值永远匹配不上，这些会话事实上已经失效；
+- **也不会自己消失**：TTL 是 7 天，但只要被刷新过就会续期；
+- **等于"可直接使用的登录凭证"躺在缓存里**：Redis 备份 / RDB 文件 / 误开的端口泄漏即等于会话泄漏。
+
+终审修复时已在本机开发 Redis 中清掉 37 个这样的明文键；**其它环境（含生产）上线时必须各执行一次**。
+
+**怎么判定**：明文 JWT 一定以 `eyJ` 开头（`{"alg":...}` 的 base64url 前缀），摘要值只可能是 `[0-9a-f]{64}`。
+所以"值以 `eyJ` 开头"的 `jwt:refresh:*` 键就是待清理项。
+
+```bash
+# 1) 只读盘点：只打印仍需清理的键名（不回显任何令牌内容）
+docker compose -f docker-compose.prod.yml exec -T redis sh -lc '
+  redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --scan --pattern "jwt:refresh:*" \
+  | while read -r k; do
+      [ "$(redis-cli -a "$REDIS_PASSWORD" --no-auth-warning GET "$k" | cut -c1-3)" = "eyJ" ] \
+        && echo "待清理: $k"
+    done'
+
+# 2) 清理：删除这些明文键（SHA-256 摘要键不受影响，当前有效会话不会被踢）
+docker compose -f docker-compose.prod.yml exec -T redis sh -lc '
+  n=0
+  for k in $(redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --scan --pattern "jwt:refresh:*"); do
+    if [ "$(redis-cli -a "$REDIS_PASSWORD" --no-auth-warning GET "$k" | cut -c1-3)" = "eyJ" ]; then
+      redis-cli -a "$REDIS_PASSWORD" --no-auth-warning DEL "$k" > /dev/null && n=$((n + 1))
+    fi
+  done
+  echo "已删除明文 refresh token 键: $n"'
+```
+
+- **预期影响**：被删掉的都是阶段 2 之前写入的会话，持有它们的客户端下次刷新会拿到 401，需要重新登录 ——
+  这是期望结果（旧明文凭证本就不该继续可用）；
+- 清理后请把上面的"1) 只读盘点"再跑一次，确认输出为空；
+- 只动 `jwt:refresh:*` 这一类键：登录失败计数、验证码、限流键、`jwt:blacklist:*` 一律不碰。
+
+### 2.4 镜像可复现性：tag、digest 与代码版本对应关系
+
+- **应用镜像 tag 与 `pom.xml` 版本号的对应**：`docker-compose.prod.yml` 里写的是
+  `image: campustrade-backend:${APP_IMAGE_TAG:-0.0.1}`，其中 `0.0.1` 对应 `backend/pom.xml` 的
+  `<version>`（当前为 `0.0.1-SNAPSHOT`）。规则是 **镜像 tag = pom 版本号去掉 `-SNAPSHOT` 后缀**：
+  发布时先改 `pom.xml` 版本，再同步 `APP_IMAGE_TAG`（或直接
+  `APP_IMAGE_TAG=0.0.2 docker compose -f docker-compose.prod.yml up -d --build`），
+  使"镜像 tag ↔ 代码版本"一一对应；**不要用 `latest`**。
+- **基础镜像与中间件镜像都固定在补丁级 tag**（见 `backend/Dockerfile` 与 `docker-compose.prod.yml`）：
+  例如运行阶段是 `eclipse-temurin:21.0.12_8-jre-alpine-3.24`（JDK 补丁 + Alpine 小版本都固定），
+  中间件是 `postgres:16.15` / `redis:7.4.11` / `minio/minio:RELEASE.2024-10-13T13-34-11Z`。
+- **记录 digest 以保证可复现**（tag 可被重新指向，digest 不能）：
+
+```bash
+# 构建后记录本次产物的 digest（tag → digest 对应关系）
+docker images --digests | grep campustrade-backend
+
+# 记录基础镜像 / 中间件镜像的 digest（多架构 manifest list 的 digest）
+docker buildx imagetools inspect eclipse-temurin:21.0.12_8-jre-alpine-3.24
+docker buildx imagetools inspect postgres:16.15
+```
+
+把输出里的 `<镜像>:<tag>@sha256:<digest>` 记进发布单/部署记录。若要求"任何机器拉到的字节完全一致"，
+把 `FROM` / `image:` 写成 digest 形式（如
+`FROM eclipse-temurin:21.0.12_8-jre-alpine-3.24@sha256:1a29e1fe...`）：固定 digest 后上游安全补丁
+不会自动进入，升级必须显式改 digest —— 与"固定 tag"是同一个取舍，只是更严格。
 
 ### 3. 部署前端 Web 产物
 ```bash
@@ -370,7 +455,7 @@ cd frontend && flutter build web --dart-define=API_BASE_URL=https://app.example.
 
 ---
 
-## 当前状态（Stage 8）
+## 当前状态（Stage 8 + 终审修复 + 批次 1/2）
 
 - [x] 标准项目根目录结构搭建
 - [x] Docker Compose 基础设施（PostgreSQL 16、Redis 7、MinIO）编排
@@ -380,5 +465,12 @@ cd frontend && flutter build web --dart-define=API_BASE_URL=https://app.example.
 - [x] 生产交付物：多阶段 `backend/Dockerfile`（非 root、JRE 21、健康检查）+ `docker-compose.prod.yml`
 - [x] 开发编排加固：中间件仅绑 `127.0.0.1`、Redis 口令、镜像 tag 固定、日志轮转与资源上限
 - [x] 脚本健壮性：外部命令退出码检查、选项 6 以测试结果决定退出码、工具链"环境变量 → PATH → 报错指引"
-- [x] Schema 单一真相源：`init.sql` 仅建 schema，建表全部交给 Flyway（空库验证 V1–V12 全 success）
+- [x] Schema 单一真相源：`init.sql` 仅建 schema，建表全部交给 Flyway（空库验证到 V12 全 success）
 - [x] 文档校正：阶段/状态/技术栈/端口/环境变量/门禁命令/生产部署同步到实际实现
+- [x] 终审修复：资料回写改定点更新、订单详情串单、生产拒绝已知开发口令、历史审计报告加"已过时"抬头
+- [x] 批次 1（后端）：可信代理解析、AI 配额、校园邮箱发送配额、token 端点限流、上传加固、V12 迁移
+- [x] 批次 2（前端）：控制器作用域与 binding、CancelToken、页面守卫与统一提示、AppLogger、冒烟测试骨架
+- [x] 工程化收尾（本批次）：门禁 Docker 前置检查、CI 与本地门禁对齐、镜像 tag 固定、CHANGELOG/CONTRIBUTING、stage7/8 报告
+- [x] 测试基线：后端 `mvn -B test` **255 项**、`flutter analyze` 0 issue、`flutter test` **176 项**（全绿）
+
+> 各阶段的提交、验证结论与测试项数变化见 [CHANGELOG.md](CHANGELOG.md)。
