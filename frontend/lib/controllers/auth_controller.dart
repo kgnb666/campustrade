@@ -246,7 +246,10 @@ class AuthController extends GetxController {
   }
 
   /// 提交校园认证申请并发送验证码
-  Future<String?> submitVerify(String schoolId, String studentNumber, String schoolEmail) async {
+  ///
+  /// 验证码由服务端通过真实邮件下发到校园邮箱，接口响应不再携带验证码（data 恒为空），
+  /// 因此这里只返回"是否已成功下发"，由页面引导用户查收邮件。
+  Future<bool> submitVerify(String schoolId, String studentNumber, String schoolEmail) async {
     try {
       isLoading.value = true;
       final response = await _dioClient.dio.post('/student/verify', data: {
@@ -256,19 +259,18 @@ class AuthController extends GetxController {
       });
 
       if (response.data['code'] == 200) {
-        final code = response.data['data']?.toString();
-        Get.snackbar('验证码已发送', response.data['message'] ?? '验证码已发送至邮箱',
+        Get.snackbar('验证码已发送', response.data['message'] ?? '验证码已发送至校园邮箱',
             snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 6),
+            duration: const Duration(seconds: 4),
             backgroundColor: Colors.blue.withAlpha(40),
             colorText: Colors.blue[900]);
-        return code;
+        return true;
       } else {
         Get.snackbar('申请失败', response.data['message'] ?? '信息校验未通过',
             snackPosition: SnackPosition.BOTTOM,
             backgroundColor: Colors.red.withAlpha(40),
             colorText: Colors.red[900]);
-        return null;
+        return false;
       }
     } on DioException catch (e) {
       final msg = e.response?.data is Map
@@ -278,7 +280,7 @@ class AuthController extends GetxController {
           snackPosition: SnackPosition.BOTTOM,
           backgroundColor: Colors.red.withAlpha(40),
           colorText: Colors.red[900]);
-      return null;
+      return false;
     } finally {
       isLoading.value = false;
     }

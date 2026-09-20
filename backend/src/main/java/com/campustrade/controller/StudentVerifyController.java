@@ -24,9 +24,12 @@ public class StudentVerifyController {
 
     /**
      * 提交校园认证信息并申请验证码
+     *
+     * <p>响应中不包含验证码：验证码经真实邮件发送到校园邮箱（本地开发且 verify.mail-enabled=false
+     * 时写入服务端日志），前端必须引导用户查收邮件后再输入。</p>
      */
     @PostMapping("/verify")
-    public Result<String> submitVerify(@Valid @RequestBody StudentVerifyDTO dto) {
+    public Result<Void> submitVerify(@Valid @RequestBody StudentVerifyDTO dto) {
         String username = SecurityUtils.getCurrentUsername();
         return studentVerifyService.submitVerify(username, dto);
     }

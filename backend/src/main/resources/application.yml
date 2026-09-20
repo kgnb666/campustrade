@@ -69,6 +69,29 @@ security:
   register:
     ip-limit-per-hour: ${SECURITY_REGISTER_IP_LIMIT:20}  # 单一来源 IP 每小时注册请求上限
 
+# 校园身份认证（验证码下发与核销）配置
+# mail-enabled 是"验证码去哪儿"的唯一开关：
+#   true  → 经 SMTP 真实发送到学生校园邮箱（生产必须为 true，见 application-prod.yml）
+#   false → 验证码写入服务端日志（[DEV-ONLY] 行），仅限本地开发
+# 生产环境（profile: prod）下 mail-enabled=false 或 MAIL_* 缺项都会在启动期直接拒绝启动
+# （见 com.campustrade.config.VerifyMailProdGuard），避免"看日志即可自证"的通道被带上线。
+verify:
+  mail-enabled: ${VERIFY_MAIL_ENABLED:false}
+  # SMTP 连接信息只从环境变量读取：源码与任何配置文件里都不存在可用的邮箱账号或口令字面量
+  mail-host: ${MAIL_HOST:}
+  mail-port: ${MAIL_PORT:465}
+  mail-username: ${MAIL_USERNAME:}
+  mail-password: ${MAIL_PASSWORD:}
+  mail-from: ${MAIL_FROM:}
+  mail-ssl-enabled: ${MAIL_SSL_ENABLED:true}   # 465 端口为 true；587(STARTTLS) 置为 false
+  mail-timeout-ms: ${MAIL_TIMEOUT_MS:5000}
+  code-ttl-minutes: 5                # 验证码有效期，同时是"核验失败计数键"的 TTL
+  max-failures: 5                    # 同一验证码最多允许输错 5 次，达到即作废
+  send-limit-per-email: 5            # 同一校园邮箱在 24 小时内最多发送 5 次
+  email-send-window-hours: 24
+  send-limit-per-user: 3             # 同一用户 10 分钟内最多发送 3 次
+  user-send-window-minutes: 10
+
 # CORS 跨域来源白名单 (逗号分隔，支持 http://localhost:* 端口通配)
 # allowCredentials 恒为 true，因此绝不允许写 "*"：那等于允许任意站点携带凭据访问本服务。
 cors:

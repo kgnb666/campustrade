@@ -17,6 +17,12 @@ minio:
   # 桶不存在时 MinioConfig 会自动创建，因此无需预先建桶。
   bucket-name: campustrade-test
 
+verify:
+  # 测试环境绝不真实发信：验证码走 verify.mail-enabled=false 的服务端日志通道，
+  # 测试代码直接从 Redis 读取验证码完成核销（见 CampusTradeStage1Tests）。
+  # 显式写死 false，即使本机 .env 里开了 VERIFY_MAIL_ENABLED=true 也不会让测试去连 SMTP。
+  mail-enabled: false
+
 logging:
   level:
     # 测试期间降低噪音，但保留业务包 DEBUG 便于定位失败原因

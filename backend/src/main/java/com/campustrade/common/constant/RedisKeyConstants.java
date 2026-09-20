@@ -79,10 +79,39 @@ public final class RedisKeyConstants {
 
     /**
      * 学生身份认证验证码前缀 (String 类型)
-     * 格式: student:verify:{phone}
-     * 存活时间 (TTL): 5 分钟
+     * 格式: student:verify:{schoolEmail} (邮箱统一 trim + 转小写)
+     * 值: 6 位数字验证码明文（仅存 Redis，不落库、不进响应、不进日志）
+     * 存活时间 (TTL): 5 分钟；核销成功或核验失败次数达到上限后立即删除
      */
     public static final String STUDENT_VERIFY_PREFIX = "student:verify:";
+
+    /**
+     * 学生身份认证验证码核验失败次数前缀 (String 类型)
+     * 格式: student:verify:fail:{schoolEmail}
+     * 值: 当前验证码的连续核验失败次数 (INCR)
+     * 存活时间 (TTL): 5 分钟（与验证码 TTL 对齐，每次失败刷新）
+     * 说明: 累计达到上限（默认 5 次）即作废当前验证码并删除验证码键，
+     *       调用方必须重新获取验证码；重新发送验证码或核销成功都会清空本计数
+     */
+    public static final String STUDENT_VERIFY_FAIL_PREFIX = "student:verify:fail:";
+
+    /**
+     * 学生身份认证验证码发送次数（按校园邮箱）前缀 (String 类型)
+     * 格式: student:verify:send:email:{schoolEmail}
+     * 值: 时间窗口内的验证码发送次数 (INCR)
+     * 存活时间 (TTL): 24 小时（滑动窗口，每次请求刷新）
+     * 说明: 同一校园邮箱 24 小时内最多发送 5 次，超出直接拒绝（429），用于阻断"换账号刷同一邮箱"
+     */
+    public static final String STUDENT_VERIFY_SEND_EMAIL_PREFIX = "student:verify:send:email:";
+
+    /**
+     * 学生身份认证验证码发送次数（按用户）前缀 (String 类型)
+     * 格式: student:verify:send:user:{userId}
+     * 值: 时间窗口内的验证码发送次数 (INCR)
+     * 存活时间 (TTL): 10 分钟（滑动窗口，每次请求刷新）
+     * 说明: 同一用户 10 分钟内最多发送 3 次，超出直接拒绝（429），用于阻断"换邮箱轰炸同一账号"
+     */
+    public static final String STUDENT_VERIFY_SEND_USER_PREFIX = "student:verify:send:user:";
 
     // =========================================================================
     // 统一 Key 构造器方法
@@ -120,7 +149,19 @@ public final class RedisKeyConstants {
         return REGISTER_IP_PREFIX + ip;
     }
 
-    public static String studentVerifyKey(String phone) {
-        return STUDENT_VERIFY_PREFIX + phone;
+    public static String studentVerifyKey(String schoolEmail) {
+        return STUDENT_VERIFY_PREFIX + schoolEmail;
+    }
+
+    public static String studentVerifyFailKey(String schoolEmail) {
+        return STUDENT_VERIFY_FAIL_PREFIX + schoolEmail;
+    }
+
+    public static String studentVerifySendEmailKey(String schoolEmail) {
+        return STUDENT_VERIFY_SEND_EMAIL_PREFIX + schoolEmail;
+    }
+
+    public static String studentVerifySendUserKey(Long userId) {
+        return STUDENT_VERIFY_SEND_USER_PREFIX + userId;
     }
 }

@@ -87,6 +87,29 @@ cd backend
 mvn spring-boot:run
 ```
 
+> **校园认证（学生身份）的验证码从哪来**：校园认证是**发布商品的硬前置**，也是卖家"已认证"
+> 标识的唯一依据，因此验证码**不再由接口返回**，只能从学生校园邮箱获取：
+>
+> | 场景 | `verify.mail-enabled` | 验证码去向 |
+> | :--- | :--- | :--- |
+> | 生产（profile `prod`） | `true`（`application-prod.yml` 已固定） | 经 SMTP 真实发送到校园邮箱 |
+> | 本地开发（默认 profile） | `false`（默认值） | **仅**写入服务端日志文件 `backend/logs/campustrade.log` 的 `[DEV-ONLY]` 行 |
+>
+> - `POST /api/student/verify` 的响应 `data` 恒为 `null`，`message` 为「验证码已发送至校园邮箱（5分钟内有效）」；
+>   接口路径与字段名均未变化，前端不再自动填充验证码，改为"已发送至 xxx 邮箱 + 60 秒倒计时 + 6 位输入框"；
+> - **本地联调取码**：启动后端后执行
+>   `Select-String -Path backend\logs\campustrade.log -Pattern '\[DEV-ONLY\]' | Select-Object -Last 1`
+>   （或直接打开该日志文件搜索 `[DEV-ONLY]`）；除该行外，验证码不会出现在任何响应体或日志中；
+> - **邮件发送失败**时接口返回明确业务错误（不降级为把验证码写进日志或响应），学生需重新发送；
+> - **生产 fail-fast**：prod profile 下若 `verify.mail-enabled=false` 或 `MAIL_*` 缺项，
+>   `VerifyMailProdGuard` 会在启动期直接拒绝启动并打印中文提示（与 JWT 密钥 fail-fast 同风格）；
+>   生产必须由部署平台注入环境变量：
+>   `MAIL_HOST`（SMTP 主机）、`MAIL_PORT`（465/587）、`MAIL_USERNAME`、`MAIL_PASSWORD`、
+>   `MAIL_FROM`（发件人地址），587 端口另需 `MAIL_SSL_ENABLED=false`（改用 STARTTLS）；
+> - **限流与失败锁定**（Redis 计数，键名与 TTL 见 `RedisKeyConstants`）：
+>   同一校园邮箱 24 小时内最多发送 5 次；同一用户 10 分钟内最多发送 3 次；
+>   同一验证码核验失败累计 5 次即作废（必须重新发送）。超限返回 429 语义的明确业务错误。
+
 ### 3. 启动前端应用
 ```bash
 cd frontend

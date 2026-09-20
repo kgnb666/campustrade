@@ -1,0 +1,25 @@
+# ==============================================================================
+#  生产环境覆盖配置（profile: prod）
+#
+#  启用方式：环境变量 SPRING_PROFILES_ACTIVE=prod
+#
+#  校园认证验证码在生产环境只有一条合法路径：经 SMTP 真实发送到学生校园邮箱。
+#  verify.mail-enabled=false 会让验证码落到服务端日志文件里（任何能读日志的人都能
+#  零成本完成认证），且邮件发送失败时绝不允许降级为"把验证码写进日志或响应"。
+#  因此这里显式把邮件通道置为 true，并由 com.campustrade.config.VerifyMailProdGuard
+#  在启动期做 fail-fast 校验（与阶段 2 的 JWT 密钥 fail-fast 风格一致）：
+#    - verify.mail-enabled=false                → 拒绝启动
+#    - mail-enabled=true 但 MAIL_* 缺项          → 拒绝启动
+#
+#  生产必须由部署平台注入的 SMTP 环境变量清单（不要写进任何配置文件或镜像）：
+#    MAIL_HOST      SMTP 服务器主机，例如 smtp.exmail.qq.com
+#    MAIL_PORT      SMTP 端口，465(SSL 直连) / 587(STARTTLS)
+#    MAIL_USERNAME  SMTP 登录账号
+#    MAIL_PASSWORD  SMTP 登录口令 / 授权码
+#    MAIL_FROM      发件人地址（通常与 MAIL_USERNAME 相同）
+#    MAIL_SSL_ENABLED  可选，465 端口保持默认 true；587 端口置为 false
+# ==============================================================================
+
+verify:
+  # 生产必须走真实邮件通道：置为 false 会导致服务拒绝启动
+  mail-enabled: true

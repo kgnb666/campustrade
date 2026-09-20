@@ -1,32 +1,45 @@
 package com.campustrade;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.campustrade.common.constant.RedisKeyConstants;
+import com.campustrade.config.VerifyMailProdGuard;
+import com.campustrade.config.VerifyProperties;
 import com.campustrade.dto.*;
 import com.campustrade.entity.StudentVerify;
 import com.campustrade.entity.User;
 import com.campustrade.entity.UserCredit;
+import com.campustrade.exception.BusinessException;
 import com.campustrade.mapper.StudentVerifyMapper;
 import com.campustrade.mapper.UserCreditMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.security.JwtAuthenticationFilter;
-import com.campustrade.service.StudentVerifyService;
+import com.campustrade.service.impl.StudentVerifyServiceImpl;
+import com.campustrade.service.mail.VerifyCodeMailSender;
 import com.campustrade.support.TestCredentials;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.mail.MailSendException;
+import org.springframework.mail.javamail.JavaMailSender;
+import org.springframework.mock.env.MockEnvironment;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -168,52 +181,148 @@ class CampusTradeStage1Tests {
 
     @Test
     @Order(7)
-    @DisplayName("7. 验证校园认证验证码生成并存入 Redis (5分钟 TTL)")
-    void test7_StudentVerifyRedisCodeSaved() throws Exception {
+    @DisplayName("7. 验证码经邮件通道下发：响应/日志不含验证码、Redis 落码并建立双向限流计数")
+    void test7_StudentVerifyCodeSentWithoutLeaking() throws Exception {
         StudentVerifyDTO dto = new StudentVerifyDTO();
         dto.setSchoolId(1L); // 清华大学 @mails.tsinghua.edu.cn
         dto.setStudentNumber("2026998877");
         dto.setSchoolEmail(SCHOOL_EMAIL);
 
-        mockMvc.perform(post("/student/verify")
+        MvcResult result = mockMvc.perform(post("/student/verify")
                         .header("Authorization", "Bearer " + userAccessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(dto)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(200));
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.message").value(StudentVerifyServiceImpl.VERIFY_CODE_SENT_MESSAGE))
+                .andReturn();
 
-        // 验证 Redis 中存在验证码且 TTL 大于 0
-        String redisKey = "student:verify:" + SCHOOL_EMAIL;
-        String cachedCode = stringRedisTemplate.opsForValue().get(redisKey);
+        String responseBody = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
+
+        // 1. 响应体不再回传验证码：data 必须为空值，整段响应文本里也不得出现验证码
+        JsonNode root = objectMapper.readTree(responseBody);
+        assertTrue(root.get("data").isNull(), "响应 data 必须为空：验证码不能再经响应回传");
+        assertFalse(responseBody.contains("测试阶段验证码"), "响应不得再出现联调验证码字段");
+
+        // 2. 验证码只存在于 Redis（5 分钟 TTL），由邮件（或本地开发日志）送达学生
+        String codeKey = RedisKeyConstants.studentVerifyKey(SCHOOL_EMAIL);
+        String cachedCode = stringRedisTemplate.opsForValue().get(codeKey);
         assertNotNull(cachedCode, "Redis 中必须存在校园验证码");
-        assertEquals(6, cachedCode.length(), "验证码长度应为 6 位");
+        assertTrue(cachedCode.matches("\\d{6}"), "验证码必须是 6 位数字");
+        assertFalse(responseBody.contains(cachedCode), "响应体中绝不能出现验证码明文");
 
-        Long expireSeconds = stringRedisTemplate.getExpire(redisKey, TimeUnit.SECONDS);
-        assertNotNull(expireSeconds);
-        assertTrue(expireSeconds > 0 && expireSeconds <= 300, "验证码 TTL 应为 5 分钟 (<=300s)");
+        Long codeExpire = stringRedisTemplate.getExpire(codeKey, TimeUnit.SECONDS);
+        assertNotNull(codeExpire);
+        assertTrue(codeExpire > 0 && codeExpire <= 300, "验证码 TTL 应为 5 分钟 (<=300s)");
+
+        // 3. 双向限流计数与 TTL：邮箱维度 24 小时、用户维度 10 分钟
+        String emailLimitKey = RedisKeyConstants.studentVerifySendEmailKey(SCHOOL_EMAIL);
+        String userLimitKey = RedisKeyConstants.studentVerifySendUserKey(
+                userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, TEST_USERNAME)).getId());
+
+        assertEquals("1", stringRedisTemplate.opsForValue().get(emailLimitKey),
+                "首次下发后邮箱维度计数应为 1");
+        Long emailLimitTtl = stringRedisTemplate.getExpire(emailLimitKey, TimeUnit.SECONDS);
+        assertNotNull(emailLimitTtl);
+        assertTrue(emailLimitTtl > 23 * 3600 && emailLimitTtl <= 24 * 3600,
+                "邮箱维度限流窗口应为 24 小时，实际 TTL=" + emailLimitTtl);
+
+        assertEquals("1", stringRedisTemplate.opsForValue().get(userLimitKey),
+                "首次下发后用户维度计数应为 1");
+        Long userLimitTtl = stringRedisTemplate.getExpire(userLimitKey, TimeUnit.SECONDS);
+        assertNotNull(userLimitTtl);
+        assertTrue(userLimitTtl > 9 * 60 && userLimitTtl <= 10 * 60,
+                "用户维度限流窗口应为 10 分钟，实际 TTL=" + userLimitTtl);
+
+        // 新验证码下发后不应残留旧的失败计数
+        assertFalse(Boolean.TRUE.equals(stringRedisTemplate.hasKey(
+                RedisKeyConstants.studentVerifyFailKey(SCHOOL_EMAIL))), "下发新验证码时必须重置失败计数");
+
+        // 4. 邮件通道策略（不发真实邮件，只验证通道选择与失败行为）
+        assertMailChannelPolicy();
     }
 
     @Test
     @Order(8)
-    @DisplayName("8. 验证校园邮箱验证码核销与认证成功")
-    void test8_StudentVerifyCodeSuccess() throws Exception {
-        String redisKey = "student:verify:" + SCHOOL_EMAIL;
-        String cachedCode = stringRedisTemplate.opsForValue().get(redisKey);
-        assertNotNull(cachedCode);
+    @DisplayName("8. 验证码核销、5 次失败即作废、重发恢复与邮箱/用户双向限流")
+    void test8_StudentVerifyCodeSuccessAndLockout() throws Exception {
+        String codeKey = RedisKeyConstants.studentVerifyKey(SCHOOL_EMAIL);
+        String failKey = RedisKeyConstants.studentVerifyFailKey(SCHOOL_EMAIL);
+        String emailLimitKey = RedisKeyConstants.studentVerifySendEmailKey(SCHOOL_EMAIL);
+
+        String originalCode = stringRedisTemplate.opsForValue().get(codeKey);
+        assertNotNull(originalCode, "前置用例应已下发验证码");
 
         StudentVerifyCodeDTO codeDTO = new StudentVerifyCodeDTO();
         codeDTO.setSchoolEmail(SCHOOL_EMAIL);
-        codeDTO.setVerifyCode(cachedCode);
 
+        // 1. 连续输错 4 次：返回 400，失败计数逐次递增，验证码仍有效
+        for (int i = 1; i <= 4; i++) {
+            codeDTO.setVerifyCode(wrongCodeOf(originalCode));
+            mockMvc.perform(post("/student/verify/code")
+                            .header("Authorization", "Bearer " + userAccessToken)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(objectMapper.writeValueAsString(codeDTO)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.code").value(400))
+                    .andExpect(jsonPath("$.message").value("验证码错误，请重新输入"));
+            assertEquals(String.valueOf(i), stringRedisTemplate.opsForValue().get(failKey),
+                    "第 " + i + " 次失败后计数应为 " + i);
+        }
+        assertNotNull(stringRedisTemplate.opsForValue().get(codeKey), "未达阈值前验证码不得作废");
+        assertNotNull(stringRedisTemplate.getExpire(failKey, TimeUnit.SECONDS));
+
+        // 2. 第 5 次输错：达到失败上限，验证码立即作废（429 语义）
+        codeDTO.setVerifyCode(wrongCodeOf(originalCode));
         mockMvc.perform(post("/student/verify/code")
                         .header("Authorization", "Bearer " + userAccessToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(codeDTO)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.code").value(200));
+                .andExpect(jsonPath("$.code").value(429))
+                .andExpect(jsonPath("$.message")
+                        .value("验证码错误次数过多，本次验证码已失效，请重新获取验证码"));
+        assertEquals("5", stringRedisTemplate.opsForValue().get(failKey));
+        assertNull(stringRedisTemplate.opsForValue().get(codeKey), "达到失败上限后验证码必须作废");
 
-        // 校验数据库状态更新为 SUCCESS
+        // 3. 作废后即使提交正确的验证码也失败，且认证状态不得被写成 SUCCESS
+        codeDTO.setVerifyCode(originalCode);
+        mockMvc.perform(post("/student/verify/code")
+                        .header("Authorization", "Bearer " + userAccessToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(codeDTO)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(400))
+                .andExpect(jsonPath("$.message").value("验证码已过期或未获取，请重新获取"));
+
         User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, TEST_USERNAME));
+        StudentVerify stillPending = studentVerifyMapper.selectOne(
+                new LambdaQueryWrapper<StudentVerify>()
+                        .eq(StudentVerify::getUserId, user.getId())
+                        .orderByDesc(StudentVerify::getCreatedTime)
+                        .last("LIMIT 1"));
+        assertNotNull(stillPending);
+        assertNotEquals("SUCCESS", stillPending.getVerifyStatus(),
+                "验证码未核销成功时，认证状态绝不能变为 SUCCESS");
+
+        // 4. 重新发送后可正常认证：失败计数被重置，新验证码生效（响应仍不回传验证码）
+        submitVerifyExpectSuccess(userAccessToken, SCHOOL_EMAIL);
+        assertFalse(Boolean.TRUE.equals(stringRedisTemplate.hasKey(failKey)),
+                "重新发送验证码必须重置失败计数");
+        String resentCode = requireCachedCode(codeKey);
+
+        codeDTO.setVerifyCode(resentCode);
+        MvcResult verified = mockMvc.perform(post("/student/verify/code")
+                        .header("Authorization", "Bearer " + userAccessToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(codeDTO)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andReturn();
+        assertTrue(objectMapper.readTree(verified.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .get("data").isNull(), "核销成功响应也不得携带数据");
+
+        // 校验数据库状态更新为 SUCCESS，且验证码明文不落库（MyBatis 参数日志会打印 SQL 实参）
         StudentVerify verifyRecord = studentVerifyMapper.selectOne(
                 new LambdaQueryWrapper<StudentVerify>()
                         .eq(StudentVerify::getUserId, user.getId())
@@ -221,9 +330,11 @@ class CampusTradeStage1Tests {
         );
         assertNotNull(verifyRecord, "认证状态应已更新为 SUCCESS");
         assertNotNull(verifyRecord.getVerifyTime(), "应记录认证通过时间");
+        assertNull(verifyRecord.getVerifyCode(), "验证码明文绝不能写入数据库（否则会被 MyBatis 参数日志泄露）");
 
-        // 验证核销后验证码已从 Redis 清理
-        assertNull(stringRedisTemplate.opsForValue().get(redisKey), "核销后 Redis 验证码应被清除");
+        // 核销后 Redis 中的验证码与失败计数都应清理
+        assertNull(stringRedisTemplate.opsForValue().get(codeKey), "核销后 Redis 验证码应被清除");
+        assertFalse(Boolean.TRUE.equals(stringRedisTemplate.hasKey(failKey)), "核销后失败计数应被清除");
 
         // 重新调用 /user/profile 验证返回认证学校与状态
         mockMvc.perform(get("/user/profile")
@@ -231,6 +342,199 @@ class CampusTradeStage1Tests {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.verifyStatus").value("SUCCESS"))
                 .andExpect(jsonPath("$.data.schoolName").value("清华大学"));
+
+        // 5. 用户维度限流：同一用户 10 分钟内第 4 次请求被拒绝（前三次已用掉配额）
+        submitVerifyExpectSuccess(userAccessToken, SCHOOL_EMAIL);
+        MvcResult userLimited = submitVerify(userAccessToken, SCHOOL_EMAIL);
+        assertRateLimited(userLimited, "验证码请求过于频繁");
+        String userLimitKey = RedisKeyConstants.studentVerifySendUserKey(user.getId());
+        assertEquals("4", stringRedisTemplate.opsForValue().get(userLimitKey));
+        Long userLimitTtl = stringRedisTemplate.getExpire(userLimitKey, TimeUnit.SECONDS);
+        assertNotNull(userLimitTtl);
+        assertTrue(userLimitTtl > 9 * 60 && userLimitTtl <= 10 * 60,
+                "用户维度限流窗口应为 10 分钟，实际 TTL=" + userLimitTtl);
+
+        // 6. 邮箱维度限流：换一个新账号继续请求同一校园邮箱，第 6 次请求被拒绝
+        //    （邮箱维度必须独立计数，否则"换账号刷同一邮箱"即可绕过）
+        String otherUsername = "stage1_other_" + UUID.randomUUID().toString().substring(0, 8);
+        String otherToken = registerAndLogin(otherUsername, TestCredentials.randomPassword(),
+                otherUsername + "@test.edu.cn");
+
+        // 第 5 次请求仍在 24 小时配额内
+        submitVerifyExpectSuccess(otherToken, SCHOOL_EMAIL);
+
+        // 第 6 次请求超出配额
+        MvcResult emailLimited = submitVerify(otherToken, SCHOOL_EMAIL);
+        assertRateLimited(emailLimited, "24 小时");
+        assertEquals("6", stringRedisTemplate.opsForValue().get(emailLimitKey));
+        Long emailLimitTtl = stringRedisTemplate.getExpire(emailLimitKey, TimeUnit.SECONDS);
+        assertNotNull(emailLimitTtl);
+        assertTrue(emailLimitTtl > 23 * 3600 && emailLimitTtl <= 24 * 3600,
+                "邮箱维度限流窗口应为 24 小时，实际 TTL=" + emailLimitTtl);
+    }
+
+    // =========================================================================
+    // 校园认证测试辅助方法（非测试用例，不增加用例数量）
+    // =========================================================================
+
+    /**
+     * 邮件通道策略断言（全部为组件级行为，不发真实邮件）：
+     * <ul>
+     *   <li>mail-enabled=false 且非 prod：验证码写入服务端日志（[DEV-ONLY]），不抛异常；</li>
+     *   <li>mail-enabled=false 且 prod：拒绝降级，抛业务错误——验证码绝不允许写进生产日志；</li>
+     *   <li>mail-enabled=true 但 SMTP 配置不完整 / SMTP 发送失败：一律抛明确业务错误，且错误信息中不含验证码；</li>
+     *   <li>prod profile 关闭邮件通道或缺 SMTP 配置：启动期 fail-fast 拒绝启动（与 JWT 密钥 fail-fast 同风格）。</li>
+     * </ul>
+     */
+    private void assertMailChannelPolicy() {
+        String sampleCode = String.format("%06d", ThreadLocalRandom.current().nextInt(100000, 1000000));
+
+        // 本地开发（mail-enabled=false 且非 prod）：走日志通道，不抛异常
+        VerifyProperties devProperties = new VerifyProperties();
+        VerifyCodeMailSender devSender = new VerifyCodeMailSender(
+                devProperties, mailSenderProvider(null), new MockEnvironment());
+        assertDoesNotThrow(() -> devSender.sendVerifyCode(SCHOOL_EMAIL, "清华大学", sampleCode),
+                "本地开发（mail-enabled=false 且非 prod）必须走日志通道");
+
+        // prod + mail-enabled=false：拒绝降级（否则验证码会落进生产日志）
+        MockEnvironment prodEnvironment = new MockEnvironment();
+        prodEnvironment.setActiveProfiles("prod");
+        VerifyCodeMailSender prodSender = new VerifyCodeMailSender(
+                devProperties, mailSenderProvider(null), prodEnvironment);
+        BusinessException prodException = assertThrows(BusinessException.class,
+                () -> prodSender.sendVerifyCode(SCHOOL_EMAIL, "清华大学", sampleCode));
+        assertEquals(500, prodException.getCode());
+        assertFalse(prodException.getMessage().contains(sampleCode), "错误信息中不得出现验证码");
+
+        // mail-enabled=true 但 SMTP 配置不完整：明确业务错误，不降级返回验证码
+        VerifyProperties incompleteProperties = configuredMailProperties();
+        incompleteProperties.setMailPassword("");
+        VerifyCodeMailSender incompleteSender = new VerifyCodeMailSender(
+                incompleteProperties, mailSenderProvider(null), new MockEnvironment());
+        BusinessException incompleteException = assertThrows(BusinessException.class,
+                () -> incompleteSender.sendVerifyCode(SCHOOL_EMAIL, "清华大学", sampleCode));
+        assertEquals(500, incompleteException.getCode());
+        assertTrue(incompleteException.getMessage().contains("SMTP"),
+                "提示必须指向 SMTP 配置问题: " + incompleteException.getMessage());
+        assertFalse(incompleteException.getMessage().contains(sampleCode), "错误信息中不得出现验证码");
+
+        // mail-enabled=true 且 SMTP 不可达：只抛业务错误，绝不降级
+        JavaMailSender failingMailSender = mock(JavaMailSender.class);
+        when(failingMailSender.createMimeMessage()).thenThrow(new MailSendException("SMTP 不可达（测试桩）"));
+        VerifyCodeMailSender failingSender = new VerifyCodeMailSender(
+                configuredMailProperties(), mailSenderProvider(failingMailSender), new MockEnvironment());
+        BusinessException sendException = assertThrows(BusinessException.class,
+                () -> failingSender.sendVerifyCode(SCHOOL_EMAIL, "清华大学", sampleCode));
+        assertEquals(500, sendException.getCode());
+        assertTrue(sendException.getMessage().contains("邮件发送失败"), sendException.getMessage());
+        assertFalse(sendException.getMessage().contains(sampleCode), "发送失败不得降级为回传验证码");
+
+        // prod 启动期守卫：关闭邮件通道 / 缺 SMTP 配置都必须拒绝启动，并给出中文环境变量清单
+        VerifyProperties prodDisabled = new VerifyProperties();
+        prodDisabled.setMailEnabled(false);
+        IllegalStateException disabledException = assertThrows(IllegalStateException.class,
+                () -> new VerifyMailProdGuard(prodDisabled));
+        assertTrue(disabledException.getMessage().contains("mail-enabled"),
+                "必须点明是 mail-enabled 导致拒绝启动: " + disabledException.getMessage());
+
+        VerifyProperties prodMissingSmtp = new VerifyProperties();
+        prodMissingSmtp.setMailEnabled(true);
+        IllegalStateException missingSmtpException = assertThrows(IllegalStateException.class,
+                () -> new VerifyMailProdGuard(prodMissingSmtp));
+        assertTrue(missingSmtpException.getMessage().contains("MAIL_HOST"),
+                "提示必须列出所需环境变量: " + missingSmtpException.getMessage());
+
+        // 配置完整时守卫不得误报
+        assertDoesNotThrow(() -> new VerifyMailProdGuard(configuredMailProperties()));
+
+        // 日志掩码：只保留首尾字符与域名，日志里不出现完整校园邮箱
+        assertEquals("t***t@mails.tsinghua.edu.cn",
+                VerifyCodeMailSender.maskEmail("test_student@mails.tsinghua.edu.cn"));
+        assertEquals("a***@test.edu.cn", VerifyCodeMailSender.maskEmail("ab@test.edu.cn"));
+    }
+
+    /**
+     * 构造"配置完整"的邮件属性：主机名使用 RFC 2606 保留的 {@code .invalid} 顶级域（不可解析、
+     * 不指向任何真实邮箱服务），口令运行时随机生成——源码中不出现任何可用凭据字面量。
+     */
+    private static VerifyProperties configuredMailProperties() {
+        VerifyProperties properties = new VerifyProperties();
+        properties.setMailEnabled(true);
+        properties.setMailHost("smtp.campus-trade.invalid");
+        properties.setMailPort(465);
+        properties.setMailUsername("verify-mailbox");
+        properties.setMailPassword(UUID.randomUUID().toString());
+        properties.setMailFrom("verify-mailbox@campus-trade.invalid");
+        return properties;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ObjectProvider<JavaMailSender> mailSenderProvider(JavaMailSender mailSender) {
+        ObjectProvider<JavaMailSender> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(mailSender);
+        return provider;
+    }
+
+    private MvcResult submitVerify(String token, String schoolEmail) throws Exception {
+        StudentVerifyDTO dto = new StudentVerifyDTO();
+        dto.setSchoolId(1L);
+        dto.setStudentNumber("2026998877");
+        dto.setSchoolEmail(schoolEmail);
+        return mockMvc.perform(post("/student/verify")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(dto)))
+                .andReturn();
+    }
+
+    private void submitVerifyExpectSuccess(String token, String schoolEmail) throws Exception {
+        MvcResult result = submitVerify(token, schoolEmail);
+        JsonNode root = objectMapper.readTree(result.getResponse().getContentAsString(StandardCharsets.UTF_8));
+        assertEquals(200, root.path("code").asInt(), "验证码应下发成功: " + root.path("message").asText());
+        assertTrue(root.get("data").isNull(), "响应 data 必须为空");
+    }
+
+    private void assertRateLimited(MvcResult result, String expectedMessageFragment) throws Exception {
+        JsonNode root = objectMapper.readTree(result.getResponse().getContentAsString(StandardCharsets.UTF_8));
+        assertEquals(429, root.path("code").asInt(), "超限必须返回 429 语义: " + root.path("message").asText());
+        assertTrue(root.path("message").asText().contains(expectedMessageFragment),
+                "限流提示应包含[" + expectedMessageFragment + "]: " + root.path("message").asText());
+        assertTrue(root.get("data").isNull(), "限流响应不得携带数据");
+    }
+
+    /** 读取 Redis 中的验证码，不存在时直接失败（避免后续断言用 null 静默通过）。 */
+    private String requireCachedCode(String codeKey) {
+        String code = stringRedisTemplate.opsForValue().get(codeKey);
+        assertNotNull(code, "Redis 中应存在验证码: " + codeKey);
+        return code;
+    }
+
+    /** 生成一个与正确验证码不同的 6 位数字，用于构造"输错"场景。 */
+    private static String wrongCodeOf(String correctCode) {
+        return String.format("%06d", (Integer.parseInt(correctCode) + 1) % 1000000);
+    }
+
+    private String registerAndLogin(String username, String password, String email) throws Exception {
+        RegisterRequestDTO register = new RegisterRequestDTO();
+        register.setUsername(username);
+        register.setPassword(password);
+        register.setEmail(email);
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(register)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200));
+
+        LoginRequestDTO login = new LoginRequestDTO();
+        login.setUsername(username);
+        login.setPassword(password);
+        MvcResult result = mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(login)))
+                .andExpect(status().isOk())
+                .andReturn();
+        return objectMapper.readTree(result.getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .path("data").path("accessToken").asText();
     }
 
     @Test

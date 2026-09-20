@@ -1,9 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../../controllers/auth_controller.dart';
 import '../../models/user_model.dart';
 
 /// 校园身份认证页面
+///
+/// 验证码由服务端通过真实邮件发送到校园邮箱，页面不再展示、也不再自动填充验证码：
+/// 用户必须查收邮件后手动输入，认证才具备"邮箱可达"的可信性。
 class StudentVerifyPage extends StatefulWidget {
   const StudentVerifyPage({super.key});
 
@@ -12,6 +17,9 @@ class StudentVerifyPage extends StatefulWidget {
 }
 
 class _StudentVerifyPageState extends State<StudentVerifyPage> {
+  /// 重新发送验证码的冷却秒数（与后端"10 分钟 3 次"的限流配合使用）
+  static const int _resendCooldownSeconds = 60;
+
   final _formKey = GlobalKey<FormState>();
   final _studentNumberController = TextEditingController();
   final _emailController = TextEditingController();
@@ -20,7 +28,9 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
 
   SchoolModel? _selectedSchool;
   bool _codeSent = false;
-  String? _lastSentCode; // 用于联调与演示显示
+  String? _sentEmail; // 验证码实际发送到的校园邮箱，用于提示文案
+  int _resendCountdown = 0;
+  Timer? _countdownTimer;
 
   @override
   void initState() {
@@ -30,13 +40,14 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
 
   @override
   void dispose() {
+    _countdownTimer?.cancel();
     _studentNumberController.dispose();
     _emailController.dispose();
     _verifyCodeController.dispose();
     super.dispose();
   }
 
-  void _handleSendCode() async {
+  Future<void> _handleSendCode() async {
     if (_selectedSchool == null) {
       Get.snackbar('提示', '请先选择所属高校', snackPosition: SnackPosition.BOTTOM);
       return;
@@ -50,31 +61,60 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
       return;
     }
 
-    final code = await _authController.submitVerify(
+    final sent = await _authController.submitVerify(
       _selectedSchool!.id,
       _studentNumberController.text,
       _emailController.text,
     );
 
-    if (code != null) {
-      setState(() {
-        _codeSent = true;
-        _lastSentCode = code;
-        _verifyCodeController.text = code; // 自动填充以便于即时核验
-      });
-    }
-  }
-
-  void _handleSubmitVerification() {
-    if (_verifyCodeController.text.trim().isEmpty) {
-      Get.snackbar('提示', '请输入6位邮箱验证码', snackPosition: SnackPosition.BOTTOM);
+    if (!sent || !mounted) {
       return;
     }
 
-    _authController.verifyCode(
+    setState(() {
+      _codeSent = true;
+      _sentEmail = _emailController.text.trim();
+      _verifyCodeController.clear(); // 新验证码需要重新输入，避免旧输入造成误判
+      _resendCountdown = _resendCooldownSeconds;
+    });
+    _startCountdown();
+  }
+
+  /// 发送成功后启动 60 秒倒计时，避免用户连续点击（后端另有 10 分钟 3 次的硬限流）
+  void _startCountdown() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _resendCountdown--;
+        if (_resendCountdown <= 0) {
+          timer.cancel();
+          _countdownTimer = null;
+        }
+      });
+    });
+  }
+
+  Future<void> _handleSubmitVerification() async {
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
+    final ok = await _authController.verifyCode(
       _emailController.text,
       _verifyCodeController.text,
     );
+
+    // 核验失败：清空输入方便重试；失败原因（验证码错误 / 已失效 / 发送过于频繁）
+    // 已由 AuthController 通过 Get.snackbar 提示，重新发送入口在同一页面即可继续操作。
+    if (!ok && mounted) {
+      setState(() {
+        _verifyCodeController.clear();
+      });
+    }
   }
 
   @override
@@ -183,20 +223,50 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
                   ),
                   const SizedBox(height: 16),
 
-                  // 发送验证码按钮
+                  // 发送验证码按钮（发送成功后 60 秒内不可重复点击）
                   Obx(() {
+                    final sending = _authController.isLoading.value;
+                    final label = _resendCountdown > 0
+                        ? '$_resendCountdown 秒后可重新发送'
+                        : (_codeSent ? '重新发送验证码' : '获取邮箱验证码');
                     return OutlinedButton.icon(
-                      onPressed: _authController.isLoading.value ? null : _handleSendCode,
+                      onPressed: (sending || _resendCountdown > 0) ? null : _handleSendCode,
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 12),
                       ),
                       icon: const Icon(Icons.send_rounded),
-                      label: Text(_codeSent ? '重新发送验证码' : '获取邮箱验证码'),
+                      label: Text(label),
                     );
                   }),
+
+                  // 发送结果提示：只告知"已发送到哪个邮箱"，不再展示验证码
+                  if (_codeSent) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withAlpha(20),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '验证码已发送至 ${_sentEmail ?? _emailController.text.trim()} 邮箱',
+                            style: TextStyle(fontSize: 13, color: Colors.blue[900]),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '请在 5 分钟内查收（含垃圾邮件箱）并输入下方验证码；未收到可稍后重新发送。',
+                            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 20),
 
-                  // 步骤 4: 验证码输入
+                  // 步骤 4: 验证码输入（验证码只能来自校园邮箱）
                   TextFormField(
                     controller: _verifyCodeController,
                     keyboardType: TextInputType.number,
@@ -208,22 +278,13 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
                       border: OutlineInputBorder(),
                       counterText: '',
                     ),
+                    validator: (v) {
+                      final code = v?.trim() ?? '';
+                      if (code.isEmpty) return '请输入6位邮箱验证码';
+                      if (!RegExp(r'^\d{6}$').hasMatch(code)) return '验证码为6位数字';
+                      return null;
+                    },
                   ),
-
-                  if (_lastSentCode != null) ...[
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        color: Colors.green.withAlpha(20),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        '联调提示：已自动填入当前生成的验证码 $_lastSentCode',
-                        style: TextStyle(fontSize: 12, color: Colors.green[800]),
-                      ),
-                    ),
-                  ],
 
                   const SizedBox(height: 24),
 
