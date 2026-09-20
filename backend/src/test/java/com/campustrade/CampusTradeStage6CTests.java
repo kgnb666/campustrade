@@ -89,6 +89,9 @@ class CampusTradeStage6CTests {
     private ReviewLikeMapper reviewLikeMapper;
 
     @Autowired
+    private TradeOrderMapper tradeOrderMapper;
+
+    @Autowired
     private AdminAuditLogMapper adminAuditLogMapper;
 
     @Autowired
@@ -187,10 +190,44 @@ class CampusTradeStage6CTests {
         return g;
     }
 
+    /**
+     * 评价夹具商品的 ID（惰性创建）：V10 迁移给 review.order_id / review.goods_id 补了外键，
+     * NOT VALID 只豁免历史数据，新插入的行仍会被校验，因此评价必须挂在真实的订单与商品上。
+     */
+    private Long reviewFixtureGoodsId;
+
+    private Long ensureReviewFixtureGoods() {
+        if (reviewFixtureGoodsId == null) {
+            reviewFixtureGoodsId = createTestGoods(USER_A_ID, "评价外键夹具商品").getId();
+        }
+        return reviewFixtureGoodsId;
+    }
+
+    /** 为评价夹具创建一条真实存在的 COMPLETED 订单（非活动状态，不受局部唯一索引限制）。 */
+    private Long createReviewFixtureOrder(Long goodsId, Long buyerId, Long sellerId) {
+        LocalDateTime now = LocalDateTime.now();
+        TradeOrder order = TradeOrder.builder()
+                .orderNo("ORD_FIXTURE6C_" + UUID.randomUUID().toString().substring(0, 8))
+                .buyerId(buyerId)
+                .sellerId(sellerId)
+                .goodsId(goodsId)
+                .goodsTitleSnapshot("评价外键夹具商品")
+                .goodsPriceSnapshot(new BigDecimal("199.00"))
+                .meetLocation("测试地点")
+                .orderStatus(OrderStatus.COMPLETED)
+                .completedTime(now)
+                .createdTime(now)
+                .updatedTime(now)
+                .build();
+        tradeOrderMapper.insert(order);
+        return order.getId();
+    }
+
     private Review createTestReview(Long reviewerId, Long reviewedUserId, Integer score, String content, ReviewStatus status) {
+        Long fixtureGoodsId = ensureReviewFixtureGoods();
         Review r = Review.builder()
-                .orderId(Math.abs(UUID.randomUUID().getMostSignificantBits()))
-                .goodsId(Math.abs(UUID.randomUUID().getMostSignificantBits()))
+                .orderId(createReviewFixtureOrder(fixtureGoodsId, reviewerId, reviewedUserId))
+                .goodsId(fixtureGoodsId)
                 .reviewerId(reviewerId)
                 .reviewedUserId(reviewedUserId)
                 .score(score)
@@ -454,9 +491,10 @@ class CampusTradeStage6CTests {
         Goods goods = createTestGoods(USER_B_ID, "考研高数真题");
 
         // 为该商品生成 3 条评价
-        long o1 = Math.abs(UUID.randomUUID().getMostSignificantBits());
-        long o2 = Math.abs(UUID.randomUUID().getMostSignificantBits());
-        long o3 = Math.abs(UUID.randomUUID().getMostSignificantBits());
+        // 评价的 order_id 受外键约束（V10），必须是真实存在的订单
+        Long o1 = createReviewFixtureOrder(goods.getId(), USER_B_ID, USER_A_ID);
+        Long o2 = createReviewFixtureOrder(goods.getId(), USER_C_ID, USER_A_ID);
+        Long o3 = createReviewFixtureOrder(goods.getId(), USER_B_ID, USER_A_ID);
         Review r1 = Review.builder()
                 .orderId(o1).goodsId(goods.getId()).reviewerId(USER_B_ID).reviewedUserId(USER_A_ID)
                 .score(5).content("评价1").status(ReviewStatus.VISIBLE).likeCount(1).createdTime(LocalDateTime.now().minusMinutes(3))

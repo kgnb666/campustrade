@@ -32,6 +32,14 @@ public final class RedisKeyConstants {
     public static final String GOODS_VIEW_DIRTY_IDS = "goods:views:dirty_ids";
 
     /**
+     * 商品浏览量刷盘任务的分布式互斥锁 (String 类型, SET NX PX)
+     * 格式: goods:views:sync:lock
+     * 值: 持有者随机令牌 (仅令牌匹配者可以释放，避免误删他人的锁)
+     * 作用: 多实例同时部署时，同一时刻只有一个实例执行刷盘，避免重复扣减 Redis 增量
+     */
+    public static final String GOODS_VIEW_SYNC_LOCK = "goods:views:sync:lock";
+
+    /**
      * 全站热门搜索词排行榜 (Sorted Set 类型)
      * 格式: search:hot
      * Member: 搜索关键词, Score: 累计搜索热度频次
@@ -123,6 +131,10 @@ public final class RedisKeyConstants {
 
     public static String goodsViewKey(Long goodsId) {
         return GOODS_VIEW_PREFIX + goodsId;
+    }
+
+    public static String goodsViewSyncLockKey() {
+        return GOODS_VIEW_SYNC_LOCK;
     }
 
     public static String searchHotKey() {

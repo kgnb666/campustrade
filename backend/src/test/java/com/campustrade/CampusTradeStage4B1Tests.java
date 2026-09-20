@@ -145,6 +145,11 @@ class CampusTradeStage4B1Tests {
         String orderNo4 = "ORD_TEST_" + UUID.randomUUID().toString().substring(0, 8);
 
         try {
+            // 0. 阶段 4 加固后 trade_order.goods_id/buyer_id/seller_id 均受外键约束
+            //    （见 V10__data_integrity_constraints.sql），因此先补齐这些被引用的真实行。
+            //    本用例只关心局部唯一索引的物理排他性，这里把引用关系补成真实数据即可，断言逻辑不变。
+            ensureReferencedRows(testGoodsId);
+
             // 1. 插入第 1 个活动中订单 (WAIT_SELLER_CONFIRM) -> 必须成功
             jdbcTemplate.update(
                     "INSERT INTO campus_trade.trade_order (order_no, buyer_id, seller_id, goods_id, order_status, goods_title_snapshot, goods_price_snapshot) " +
@@ -180,8 +185,31 @@ class CampusTradeStage4B1Tests {
             }, "已完成的历史订单不属于活动状态，不受局部唯一约束限制");
 
         } finally {
-            // 清理测试临时数据
+            // 清理测试临时数据（按外键依赖倒序：订单 -> 商品 -> 用户）
             jdbcTemplate.update("DELETE FROM campus_trade.trade_order WHERE goods_id = ?", testGoodsId);
+            jdbcTemplate.update("DELETE FROM campus_trade.goods WHERE id = ?", testGoodsId);
+            jdbcTemplate.update("DELETE FROM campus_trade.\"user\" WHERE id IN (101, 102, 103, 104, 201)");
         }
+    }
+
+    /**
+     * 为局部唯一索引用例补齐被外键引用的真实行：买家 101/102/103/104、卖家 201、以及商品 99999901。
+     */
+    private void ensureReferencedRows(long testGoodsId) {
+        String insertUserSql =
+                "INSERT INTO campus_trade.\"user\" (id, username, password, nickname, role, status, created_time, updated_time) "
+                        + "VALUES (?, ?, ?, ?, 'USER', 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+                        + "ON CONFLICT (id) DO NOTHING";
+        jdbcTemplate.update(insertUserSql, 101, "stage4b1_buyer_101", "$2a$10$abcdefghijklmnopqrstuvwxyz1234567890", "局部唯一索引买家1");
+        jdbcTemplate.update(insertUserSql, 102, "stage4b1_buyer_102", "$2a$10$abcdefghijklmnopqrstuvwxyz1234567890", "局部唯一索引买家2");
+        jdbcTemplate.update(insertUserSql, 103, "stage4b1_buyer_103", "$2a$10$abcdefghijklmnopqrstuvwxyz1234567890", "局部唯一索引买家3");
+        jdbcTemplate.update(insertUserSql, 104, "stage4b1_buyer_104", "$2a$10$abcdefghijklmnopqrstuvwxyz1234567890", "局部唯一索引买家4");
+        jdbcTemplate.update(insertUserSql, 201, "stage4b1_seller_201", "$2a$10$abcdefghijklmnopqrstuvwxyz1234567890", "局部唯一索引卖家");
+
+        jdbcTemplate.update(
+                "INSERT INTO campus_trade.goods (id, seller_id, school_id, category_id, title, description, price, condition_level, status, view_count, created_time, updated_time) "
+                        + "VALUES (?, 201, 1, 1, '局部唯一索引测试商品', '局部唯一索引测试商品', 99.00, '95新', 'ON_SALE', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) "
+                        + "ON CONFLICT (id) DO NOTHING",
+                testGoodsId);
     }
 }

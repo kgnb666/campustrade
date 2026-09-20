@@ -55,4 +55,38 @@ public interface CreditService {
             Long relatedId,
             String reason
     );
+
+    /**
+     * 增加信用积分，并显式指定"业务动作标识"参与幂等键计算。
+     *
+     * <p><b>幂等键语义</b>：{@code changeType|relatedType|relatedId|actionKey}。
+     * 同一次业务动作（含管理员治理动作）无论被重试多少次都得到同一个键，因此只生效一次；
+     * 不同次动作（例如"屏蔽 → 恢复 → 再次屏蔽"）只要 {@code actionKey} 不同就各自生效。</p>
+     *
+     * @param actionKey 业务动作唯一标识（如治理动作对应的审计日志 ID）；传 null 时退化为
+     *                  "按 changeType + relatedType + relatedId 幂等"，与历史行为一致
+     */
+    UserCredit addCredit(
+            Long userId,
+            Integer score,
+            CreditChangeType type,
+            String relatedType,
+            Long relatedId,
+            String reason,
+            String actionKey
+    );
+
+    /**
+     * 扣除信用积分，并显式指定"业务动作标识"参与幂等键计算（语义同
+     * {@link #addCredit(Long, Integer, CreditChangeType, String, Long, String, String)}）。
+     */
+    UserCredit deductCredit(
+            Long userId,
+            Integer score,
+            CreditChangeType type,
+            String relatedType,
+            Long relatedId,
+            String reason,
+            String actionKey
+    );
 }

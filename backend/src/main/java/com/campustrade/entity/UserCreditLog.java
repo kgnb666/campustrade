@@ -35,10 +35,28 @@ public class UserCreditLog implements Serializable {
     private String changeType;
 
     /**
-     * 分值变动大小 (正数或负数)
+     * 分值变动大小：<b>实际生效值</b>（即 after_score - before_score）。
+     * 当余额被 [0,200] 区间截断时，该值会小于请求值（完全截断时为 0），
+     * 从而保证对账恒等式 {@code 100 + SUM(change_score) == credit_score} 永远成立。
      */
     @TableField("change_score")
     private Integer changeScore;
+
+    /**
+     * 调用方请求的原始变动值（保留请求口径，便于审计区分"请求了多少"与"实际生效多少"）
+     */
+    @TableField("request_score")
+    private Integer requestScore;
+
+    /**
+     * 幂等键：{@code changeType|relatedType|relatedId|actionKey}。
+     * 同一次业务动作（含管理员治理动作）重试得到同一个键 → 不重复生效；
+     * 不同次动作（例如"屏蔽 → 恢复 → 再次屏蔽"）键不同 → 各自生效。
+     * 库侧由唯一索引 {@code uk_credit_log_idempotent(user_id, idem_key)} 兜底
+     * （V10 迁移把该索引的键由业务维度升级为业务动作维度）。
+     */
+    @TableField("idem_key")
+    private String idemKey;
 
     /**
      * 变动前积分

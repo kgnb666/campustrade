@@ -47,21 +47,24 @@ public class UserServiceImpl implements UserService {
         }
 
         // 1. 查询信用档案
+        //    GET 路径绝不产生写副作用：档案缺失时只返回默认视图（100 分 / 0 计数），不回写数据库。
+        //    原因：读接口并发（同一新用户多端同时首刷）会在"查不到就 insert"上撞 user_credit_user_id_key
+        //    唯一键，冲突后 PostgreSQL 事务已被标记 aborted，catch 里再查必然失败 → 500。
+        //    档案的真正创建统一由 CreditService.getOrCreateCredit（INSERT ... ON CONFLICT DO NOTHING）负责。
         UserCredit userCredit = userCreditMapper.selectOne(
                 new LambdaQueryWrapper<UserCredit>().eq(UserCredit::getUserId, user.getId())
         );
         if (userCredit == null) {
-            // 防御性初始化
-            userCredit = UserCredit.builder()
-                    .userId(user.getId())
-                    .creditScore(100)
-                    .tradeCount(0)
-                    .goodReviewCount(0)
-                    .badReviewCount(0)
-                    .createdTime(LocalDateTime.now())
-                    .build();
-            userCreditMapper.insert(userCredit);
+            log.debug("用户信用档案尚未建立，GET /profile 仅返回默认信用视图（不落库）: userId={}", user.getId());
         }
+        int creditScore = (userCredit != null && userCredit.getCreditScore() != null)
+                ? userCredit.getCreditScore() : 100;
+        int tradeCount = (userCredit != null && userCredit.getTradeCount() != null)
+                ? userCredit.getTradeCount() : 0;
+        int goodReviewCount = (userCredit != null && userCredit.getGoodReviewCount() != null)
+                ? userCredit.getGoodReviewCount() : 0;
+        int badReviewCount = (userCredit != null && userCredit.getBadReviewCount() != null)
+                ? userCredit.getBadReviewCount() : 0;
 
         // 2. 查询最新学籍认证状态
         StudentVerify studentVerify = studentVerifyMapper.selectOne(
@@ -98,10 +101,10 @@ public class UserServiceImpl implements UserService {
                 .schoolName(schoolName)
                 .studentNumber(studentNumber)
                 .credit(UserCreditVO.builder()
-                        .creditScore(userCredit.getCreditScore())
-                        .tradeCount(userCredit.getTradeCount())
-                        .goodReviewCount(userCredit.getGoodReviewCount())
-                        .badReviewCount(userCredit.getBadReviewCount())
+                        .creditScore(creditScore)
+                        .tradeCount(tradeCount)
+                        .goodReviewCount(goodReviewCount)
+                        .badReviewCount(badReviewCount)
                         .build())
                 .build();
 

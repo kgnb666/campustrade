@@ -137,7 +137,16 @@ public class ReviewServiceImpl implements ReviewService {
                 .updatedTime(now)
                 .build();
 
-        reviewMapper.insert(review);
+        // 第 5 步的前置校验只能拦住"非并发"的重复评价；并发双击/重放下会双双通过前置校验，
+        // 最终由 uk_review_order_reviewer 唯一索引兜底。此处把数据库唯一冲突翻译为 409 业务语义，
+        // 而不是让它冒泡成 500（与 FavoriteServiceImpl 的既有写法对齐）。
+        try {
+            reviewMapper.insert(review);
+        } catch (DuplicateKeyException e) {
+            log.warn("并发重复评价被唯一约束 uk_review_order_reviewer 拦截: orderId={}, reviewerId={}",
+                    order.getId(), currentUserId);
+            throw new BusinessException(409, "您已对该订单发表过评价，不可重复评价");
+        }
         log.info("用户评价发布成功: reviewId={}, orderId={}, reviewerId={}, score={}",
                 review.getId(), order.getId(), currentUserId, request.getScore());
 

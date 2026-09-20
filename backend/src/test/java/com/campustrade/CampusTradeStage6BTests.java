@@ -7,6 +7,7 @@ import com.campustrade.dto.report.HandleReportRequest;
 import com.campustrade.dto.report.ReportQueryRequest;
 import com.campustrade.entity.*;
 import com.campustrade.enums.AdminOperationType;
+import com.campustrade.enums.OrderStatus;
 import com.campustrade.enums.ReportReasonType;
 import com.campustrade.enums.ReportStatus;
 import com.campustrade.enums.ReportTargetType;
@@ -85,6 +86,9 @@ class CampusTradeStage6BTests {
 
     @Autowired
     private AdminAuditLogMapper adminAuditLogMapper;
+
+    @Autowired
+    private TradeOrderMapper tradeOrderMapper;
 
     @Autowired
     private UserCreditMapper userCreditMapper;
@@ -188,10 +192,45 @@ class CampusTradeStage6BTests {
         return g;
     }
 
+    /**
+     * 评价夹具商品的 ID（惰性创建）：V10 迁移给 review.order_id / review.goods_id 补了外键，
+     * NOT VALID 只豁免历史数据，新插入的行仍会被校验，因此评价必须挂在真实的订单与商品上。
+     */
+    private Long reviewFixtureGoodsId;
+
+    private Long ensureReviewFixtureGoods() {
+        if (reviewFixtureGoodsId == null) {
+            reviewFixtureGoodsId = createTestGoods(SELLER_USER_ID, "评价外键夹具商品", "ON_SALE").getId();
+        }
+        return reviewFixtureGoodsId;
+    }
+
+    /** 为评价夹具创建一条真实存在的 COMPLETED 订单（非活动状态，不受局部唯一索引限制）。 */
+    private Long createReviewFixtureOrder(Long goodsId, Long buyerId, Long sellerId) {
+        LocalDateTime now = LocalDateTime.now();
+        TradeOrder order = TradeOrder.builder()
+                .orderNo("ORD_FIXTURE6B_" + UUID.randomUUID().toString().substring(0, 8))
+                .buyerId(buyerId)
+                .sellerId(sellerId)
+                .goodsId(goodsId)
+                .goodsTitleSnapshot("评价外键夹具商品")
+                .goodsPriceSnapshot(new BigDecimal("299.00"))
+                .meetLocation("测试地点")
+                .orderStatus(OrderStatus.COMPLETED)
+                .completedTime(now)
+                .createdTime(now)
+                .updatedTime(now)
+                .build();
+        tradeOrderMapper.insert(order);
+        return order.getId();
+    }
+
     private Review createTestReview(Long reviewerId, Long reviewedUserId, Integer score, String content) {
+        Long fixtureGoodsId = ensureReviewFixtureGoods();
+        Long fixtureOrderId = createReviewFixtureOrder(fixtureGoodsId, reviewerId, reviewedUserId);
         Review r = Review.builder()
-                .orderId(Math.abs(UUID.randomUUID().getMostSignificantBits()))
-                .goodsId(Math.abs(UUID.randomUUID().getMostSignificantBits()))
+                .orderId(fixtureOrderId)
+                .goodsId(fixtureGoodsId)
                 .reviewerId(reviewerId)
                 .reviewedUserId(reviewedUserId)
                 .score(score)

@@ -112,13 +112,12 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
         String note = request.getNote().trim();
 
         if ("VALID".equals(action) || "ACCEPT".equals(action)) {
-            // 1. 举报属实：更新工单状态
-            report.setStatus(ReportStatus.HANDLED_VALID.getCode());
-            report.setHandledBy(adminId);
-            report.setHandledTime(now);
-            report.setHandleResult(note);
-            report.setUpdatedTime(now);
-            reportMapper.updateById(report);
+            // 1. 举报属实：原子条件更新工单状态（UPDATE ... WHERE id=? AND status='PENDING'）。
+            //    这是并发处理同一工单的唯一有效性判定：两个管理员同时处理时，后到者的 UPDATE
+            //    会因 status 已不是 PENDING 而命中 0 行，直接抛 409 并整体回滚，
+            //    因此结论只落一次、审计只增一条、治理动作与信用追缴也只执行一次。
+            requireReportPendingUpdated(reportId, adminId,
+                    reportMapper.handleReportAtomic(reportId, ReportStatus.HANDLED_VALID.getCode(), adminId, now, note));
 
             // 2. 写入工单审核采纳的管理员审计流水
             adminAuditLogMapper.insert(AdminAuditLog.builder()
@@ -141,13 +140,9 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                     adminId, reportId, report.getTargetType(), report.getTargetId());
 
         } else if ("INVALID".equals(action) || "REJECT".equals(action)) {
-            // 举报不属实：驳回工单
-            report.setStatus(ReportStatus.HANDLED_INVALID.getCode());
-            report.setHandledBy(adminId);
-            report.setHandledTime(now);
-            report.setHandleResult(note);
-            report.setUpdatedTime(now);
-            reportMapper.updateById(report);
+            // 举报不属实：原子条件更新驳回工单（并发语义同上）
+            requireReportPendingUpdated(reportId, adminId,
+                    reportMapper.handleReportAtomic(reportId, ReportStatus.HANDLED_INVALID.getCode(), adminId, now, note));
 
             // 写入工单驳回审计流水
             adminAuditLogMapper.insert(AdminAuditLog.builder()
@@ -171,6 +166,18 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
         }
 
         return getReportDetail(reportId);
+    }
+
+    /**
+     * 校验"原子条件处理工单"的结果：0 行受影响说明工单已被其他管理员处理。
+     *
+     * <p>此处抛异常会回滚本事务，从而保证审计流水与治理动作都不会由失败方重复写入。</p>
+     */
+    private void requireReportPendingUpdated(Long reportId, Long adminId, int affected) {
+        if (affected <= 0) {
+            log.warn("并发处理同一举报工单被原子条件更新拦截，本次处理未生效: reportId={}, losingAdminId={}", reportId, adminId);
+            throw new BusinessException(409, "该工单已被其他管理员处理，请刷新后查看最新状态");
+        }
     }
 
     @Override
@@ -204,78 +211,101 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
             Goods goods = goodsMapper.selectById(targetId);
             if (goods != null) {
                 String beforeStatus = goods.getStatus();
-                goods.setStatus("OFF_SHELF");
-                goods.setUpdatedTime(now);
-                goodsMapper.updateById(goods);
-
-                adminAuditLogMapper.insert(AdminAuditLog.builder()
-                        .adminId(adminId)
-                        .adminUsername(adminUsername)
-                        .operationType(AdminOperationType.OFF_SHELF_GOODS.getCode())
-                        .targetType("GOODS")
-                        .targetId(goods.getId())
-                        .beforeStatus(beforeStatus)
-                        .afterStatus("OFF_SHELF")
-                        .reason(note)
-                        .ipAddress(ipAddress)
-                        .createdTime(now)
-                        .build());
-                log.info("治理动作: 违规商品下架 goodsId={}, beforeStatus={}", goods.getId(), beforeStatus);
+                // 定点更新 + 前置条件：只改 status/updated_time，绝不整行回写（否则会覆盖并发浏览量/价格修改）
+                int affected = goodsMapper.offShelfForGovernance(goods.getId());
+                if (affected <= 0) {
+                    log.warn("治理下架未生效（商品已处于 {} 状态，无需重复下架）: goodsId={}, reportId={}",
+                            beforeStatus, goods.getId(), report.getId());
+                } else {
+                    adminAuditLogMapper.insert(AdminAuditLog.builder()
+                            .adminId(adminId)
+                            .adminUsername(adminUsername)
+                            .operationType(AdminOperationType.OFF_SHELF_GOODS.getCode())
+                            .targetType("GOODS")
+                            .targetId(goods.getId())
+                            .beforeStatus(beforeStatus)
+                            .afterStatus("OFF_SHELF")
+                            .reason(note)
+                            .ipAddress(ipAddress)
+                            .createdTime(now)
+                            .build());
+                    log.info("治理动作: 违规商品下架 goodsId={}, beforeStatus={}", goods.getId(), beforeStatus);
+                }
             }
         } else if (ReportTargetType.REVIEW.getCode().equals(targetType)) {
             Review review = reviewMapper.selectById(targetId);
             if (review != null) {
                 String beforeStatus = review.getStatus() != null ? review.getStatus().name() : "VISIBLE";
-                review.setStatus(ReviewStatus.AUDIT_REJECTED);
-                review.setUpdatedTime(now);
-                reviewMapper.updateById(review);
+                // 定点更新 + 前置条件：VISIBLE -> AUDIT_REJECTED 的原子跃迁（与 restoreReviewAtomic 对称）
+                int affected = reviewMapper.shieldReviewAtomic(review.getId());
+                if (affected <= 0) {
+                    log.warn("治理屏蔽未生效（评价当前状态 {}，可能已被其他管理员屏蔽）: reviewId={}, reportId={}",
+                            beforeStatus, review.getId(), report.getId());
+                } else {
+                    // 先落审计日志，再用"审计日志主键"作为本次治理动作的唯一标识参与信用幂等键：
+                    // 同一动作重试 → 键相同 → 不重复追缴；不同次动作（屏蔽→恢复→再次屏蔽）→ 键不同 → 各自生效
+                    AdminAuditLog auditLog = AdminAuditLog.builder()
+                            .adminId(adminId)
+                            .adminUsername(adminUsername)
+                            .operationType(AdminOperationType.SHIELD_REVIEW.getCode())
+                            .targetType("REVIEW")
+                            .targetId(review.getId())
+                            .beforeStatus(beforeStatus)
+                            .afterStatus(ReviewStatus.AUDIT_REJECTED.name())
+                            .reason(note)
+                            .ipAddress(ipAddress)
+                            .createdTime(now)
+                            .build();
+                    adminAuditLogMapper.insert(auditLog);
 
-                // 信用安全冲正 (Credit Reversal)
-                reversalReviewCredit(review, note);
+                    reversalReviewCredit(review, note, governanceActionKey(AdminOperationType.SHIELD_REVIEW.getCode(), auditLog.getId()));
 
-                adminAuditLogMapper.insert(AdminAuditLog.builder()
-                        .adminId(adminId)
-                        .adminUsername(adminUsername)
-                        .operationType(AdminOperationType.SHIELD_REVIEW.getCode())
-                        .targetType("REVIEW")
-                        .targetId(review.getId())
-                        .beforeStatus(beforeStatus)
-                        .afterStatus(ReviewStatus.AUDIT_REJECTED.name())
-                        .reason(note)
-                        .ipAddress(ipAddress)
-                        .createdTime(now)
-                        .build());
-                log.info("治理动作: 违规评价屏蔽 reviewId={}, beforeStatus={}", review.getId(), beforeStatus);
+                    log.info("治理动作: 违规评价屏蔽 reviewId={}, beforeStatus={}, actionKey={}",
+                            review.getId(), beforeStatus, governanceActionKey(AdminOperationType.SHIELD_REVIEW.getCode(), auditLog.getId()));
+                }
             }
         } else if (ReportTargetType.USER.getCode().equals(targetType)) {
             User user = userMapper.selectById(targetId);
             if (user != null) {
                 String beforeStatus = user.getStatus();
-                user.setStatus("FROZEN");
-                user.setUpdatedTime(now);
-                userMapper.updateById(user);
-
-                adminAuditLogMapper.insert(AdminAuditLog.builder()
-                        .adminId(adminId)
-                        .adminUsername(adminUsername)
-                        .operationType(AdminOperationType.FREEZE_USER.getCode())
-                        .targetType("USER")
-                        .targetId(user.getId())
-                        .beforeStatus(beforeStatus)
-                        .afterStatus("FROZEN")
-                        .reason(note)
-                        .ipAddress(ipAddress)
-                        .createdTime(now)
-                        .build());
-                log.info("治理动作: 违规用户冻结 userId={}, beforeStatus={}", user.getId(), beforeStatus);
+                // 定点更新 + 前置条件：只改 status/updated_time
+                int affected = userMapper.freezeForGovernance(user.getId());
+                if (affected <= 0) {
+                    log.warn("治理冻结未生效（用户已处于 {} 状态）: userId={}, reportId={}",
+                            beforeStatus, user.getId(), report.getId());
+                } else {
+                    adminAuditLogMapper.insert(AdminAuditLog.builder()
+                            .adminId(adminId)
+                            .adminUsername(adminUsername)
+                            .operationType(AdminOperationType.FREEZE_USER.getCode())
+                            .targetType("USER")
+                            .targetId(user.getId())
+                            .beforeStatus(beforeStatus)
+                            .afterStatus("FROZEN")
+                            .reason(note)
+                            .ipAddress(ipAddress)
+                            .createdTime(now)
+                            .build());
+                    log.info("治理动作: 违规用户冻结 userId={}, beforeStatus={}", user.getId(), beforeStatus);
+                }
             }
         }
     }
 
     /**
+     * 构造治理动作的幂等标识：{@code 操作类型@AUDIT:审计日志ID}。
+     *
+     * <p>每一次真正生效的治理动作都会且只会写入一条 {@code admin_audit_log}（状态跃迁是原子条件更新，
+     * 未被跃迁的分支不会落审计），因此审计日志主键天然就是"这次动作"的唯一标识。</p>
+     */
+    private String governanceActionKey(String operationType, Long auditLogId) {
+        return operationType + "@AUDIT:" + auditLogId;
+    }
+
+    /**
      * 评价违规屏蔽后的信用精准冲正
      */
-    private void reversalReviewCredit(Review review, String note) {
+    private void reversalReviewCredit(Review review, String note, String actionKey) {
         if (review == null || review.getReviewedUserId() == null || review.getScore() == null) {
             return;
         }
@@ -291,7 +321,8 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                     CreditChangeType.ADMIN_ADJUST,
                     "REVIEW",
                     reviewId,
-                    "违规好评被管理员屏蔽，追缴信用分 (" + note + ")"
+                    "违规好评被管理员屏蔽，追缴信用分 (" + note + ")",
+                    actionKey
             );
         }
         // 4星原 +1 -> 冲正扣回 1 分
@@ -302,7 +333,8 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                     CreditChangeType.ADMIN_ADJUST,
                     "REVIEW",
                     reviewId,
-                    "违规好评被管理员屏蔽，追缴信用分 (" + note + ")"
+                    "违规好评被管理员屏蔽，追缴信用分 (" + note + ")",
+                    actionKey
             );
         }
         // 2星原 -2 -> 冲正补回 2 分
@@ -313,7 +345,8 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                     CreditChangeType.ADMIN_ADJUST,
                     "REVIEW",
                     reviewId,
-                    "违规差评被管理员屏蔽，恢复信用分 (" + note + ")"
+                    "违规差评被管理员屏蔽，恢复信用分 (" + note + ")",
+                    actionKey
             );
         }
         // 1星原 -5 -> 冲正补回 5 分
@@ -324,7 +357,8 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                     CreditChangeType.ADMIN_ADJUST,
                     "REVIEW",
                     reviewId,
-                    "违规差评被管理员屏蔽，恢复信用分 (" + note + ")"
+                    "违规差评被管理员屏蔽，恢复信用分 (" + note + ")",
+                    actionKey
             );
         }
         // 3星原变动 0 分 -> 无需冲正
@@ -488,11 +522,10 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
         String note = (reason != null && !reason.trim().isEmpty()) ? reason.trim() : "管理员审核恢复";
         LocalDateTime now = LocalDateTime.now();
 
-        // 4. 信用精准反向补偿 (Credit Restoration)
-        restoreReviewCredit(review, note);
-
-        // 5. 写入管理员审计日志
-        adminAuditLogMapper.insert(AdminAuditLog.builder()
+        // 4. 先写入管理员审计日志：它的主键即"本次恢复动作"的唯一标识，
+        //    随后作为 actionKey 参与信用幂等键 —— 同一次恢复重试不重复补偿，
+        //    而"再次屏蔽后第二次恢复"是新动作（新审计 ID），必须再次生效。
+        AdminAuditLog auditLog = AdminAuditLog.builder()
                 .adminId(adminId)
                 .adminUsername(adminUsername)
                 .operationType(AdminOperationType.RESTORE_REVIEW.getCode())
@@ -503,9 +536,16 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                 .reason(note)
                 .ipAddress(ipAddress)
                 .createdTime(now)
-                .build());
+                .build();
+        adminAuditLogMapper.insert(auditLog);
 
-        log.info("管理员治理动作: 评价解除屏蔽并恢复展示 reviewId={}, adminId={}", reviewId, adminId);
+        String actionKey = governanceActionKey(AdminOperationType.RESTORE_REVIEW.getCode(), auditLog.getId());
+
+        // 5. 信用精准反向补偿 (Credit Restoration)
+        restoreReviewCredit(review, note, actionKey);
+
+        log.info("管理员治理动作: 评价解除屏蔽并恢复展示 reviewId={}, adminId={}, actionKey={}",
+                reviewId, adminId, actionKey);
 
         // 6. 重新查出最新实体组装 VO
         Review updatedReview = reviewMapper.selectById(reviewId);
@@ -527,7 +567,7 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
     /**
      * 评价恢复后的信用精准反向补偿
      */
-    private void restoreReviewCredit(Review review, String note) {
+    private void restoreReviewCredit(Review review, String note, String actionKey) {
         if (review == null || review.getReviewedUserId() == null || review.getScore() == null) {
             return;
         }
@@ -543,7 +583,8 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                     CreditChangeType.ADMIN_ADJUST,
                     "REVIEW_RESTORE",
                     reviewId,
-                    "管理员恢复合规好评，恢复信用分 (" + note + ")"
+                    "管理员恢复合规好评，恢复信用分 (" + note + ")",
+                    actionKey
             );
         }
         // 4星好评恢复: +1 分
@@ -554,7 +595,8 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                     CreditChangeType.ADMIN_ADJUST,
                     "REVIEW_RESTORE",
                     reviewId,
-                    "管理员恢复合规好评，恢复信用分 (" + note + ")"
+                    "管理员恢复合规好评，恢复信用分 (" + note + ")",
+                    actionKey
             );
         }
         // 2星差评恢复: -2 分
@@ -565,7 +607,8 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                     CreditChangeType.ADMIN_ADJUST,
                     "REVIEW_RESTORE",
                     reviewId,
-                    "管理员恢复差评展示，重新扣减信用分 (" + note + ")"
+                    "管理员恢复差评展示，重新扣减信用分 (" + note + ")",
+                    actionKey
             );
         }
         // 1星差评恢复: -5 分
@@ -576,7 +619,8 @@ public class AdminGovernanceServiceImpl implements AdminGovernanceService {
                     CreditChangeType.ADMIN_ADJUST,
                     "REVIEW_RESTORE",
                     reviewId,
-                    "管理员恢复差评展示，重新扣减信用分 (" + note + ")"
+                    "管理员恢复差评展示，重新扣减信用分 (" + note + ")",
+                    actionKey
             );
         }
         // 3星评价: 0 分，无需调整

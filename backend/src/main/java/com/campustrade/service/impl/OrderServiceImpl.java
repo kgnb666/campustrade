@@ -10,14 +10,12 @@ import com.campustrade.entity.Goods;
 import com.campustrade.entity.GoodsImage;
 import com.campustrade.entity.TradeOrder;
 import com.campustrade.entity.User;
-import com.campustrade.entity.UserCredit;
 import com.campustrade.enums.CreditChangeType;
 import com.campustrade.enums.OrderStatus;
 import com.campustrade.exception.OrderBusinessException;
 import com.campustrade.mapper.GoodsImageMapper;
 import com.campustrade.mapper.GoodsMapper;
 import com.campustrade.mapper.TradeOrderMapper;
-import com.campustrade.mapper.UserCreditMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.service.CreditService;
 import com.campustrade.service.OrderService;
@@ -48,7 +46,6 @@ public class OrderServiceImpl implements OrderService {
     private final TradeOrderMapper tradeOrderMapper;
     private final GoodsMapper goodsMapper;
     private final GoodsImageMapper goodsImageMapper;
-    private final UserCreditMapper userCreditMapper;
     private final UserMapper userMapper;
     private final CreditService creditService;
 
@@ -98,6 +95,21 @@ public class OrderServiceImpl implements OrderService {
             throw new OrderBusinessException(400, "商品非在售状态，无法下单");
         }
 
+        // 3.1 原子锁货：UPDATE goods SET status='LOCKED' WHERE id=? AND status='ON_SALE'
+        //     旧实现是"读整行 → setStatus(LOCKED) → updateById(实体)"，在 MyBatis-Plus NOT_NULL 策略下
+        //     会把读取时刻的 view_count / price / title 等整行非空字段一并写回，覆盖并发提交
+        //     （典型症状：并发浏览量同步后浏览量回退、卖家刚改的标题被抹掉）。
+        //     条件更新本身持有该行的排他锁，因此并发下单天然串行化：后到者命中 0 行并被明确拒绝。
+        int locked = goodsMapper.lockForOrder(goodsId);
+        if (locked <= 0) {
+            Goods latest = goodsMapper.selectById(goodsId);
+            String currentStatus = (latest != null) ? String.valueOf(latest.getStatus()) : "记录已不存在";
+            log.warn("下单锁货未命中（0 行受影响）: goodsId={}, buyerId={}, currentStatus={}",
+                    goodsId, buyerId, currentStatus);
+            throw new OrderBusinessException(400,
+                    "商品当前状态为[" + currentStatus + "]，无法下单（可能已被其他买家锁定、已售出或已被卖家下架）");
+        }
+
         // 4. 获取商品封面主图作为快照
         String coverImageUrl = null;
         List<GoodsImage> images = goodsImageMapper.selectList(
@@ -142,11 +154,6 @@ public class OrderServiceImpl implements OrderService {
             log.warn("订单插入冲突 (可能触发同一商品局部唯一索引并发防重限制): goodsId={}", goodsId, e);
             throw new OrderBusinessException(400, "该商品已被其他买家下单锁定，请勿重复下单");
         }
-
-        // 8. 同步更新商品状态为 LOCKED
-        goods.setStatus("LOCKED");
-        goods.setUpdatedTime(now);
-        goodsMapper.updateById(goods);
 
         log.info("订单创建成功: orderId={}, orderNo={}, buyerId={}, sellerId={}, goodsId={}",
                 order.getId(), orderNo, buyerId, goods.getSellerId(), goodsId);
@@ -224,12 +231,21 @@ public class OrderServiceImpl implements OrderService {
         order.setUpdatedTime(now);
         tradeOrderMapper.updateById(order);
 
-        // 恢复商品状态: 若当前为 LOCKED，则恢复为 ON_SALE
-        Goods goods = goodsMapper.selectById(order.getGoodsId());
-        if (goods != null && "LOCKED".equalsIgnoreCase(goods.getStatus())) {
-            goods.setStatus("ON_SALE");
-            goods.setUpdatedTime(now);
-            goodsMapper.updateById(goods);
+        // 恢复商品状态：定点更新 + 前置条件（UPDATE goods SET status='ON_SALE' WHERE id=? AND status='LOCKED'）。
+        // 旧实现把整行商品读出来 updateById，会把读取时刻的 view_count 等字段一起写回，覆盖并发浏览量同步。
+        int restored = goodsMapper.restoreToOnSale(order.getGoodsId());
+        if (restored <= 0) {
+            Goods latest = goodsMapper.selectById(order.getGoodsId());
+            if (latest == null) {
+                log.warn("订单取消后未能恢复商品在售：商品记录已不存在: orderId={}, goodsId={}", orderId, order.getGoodsId());
+            } else if ("ON_SALE".equalsIgnoreCase(latest.getStatus())) {
+                log.info("订单取消时商品已处于在售状态，无需恢复（幂等）: orderId={}, goodsId={}", orderId, order.getGoodsId());
+            } else {
+                log.error("订单取消后商品状态无法自动恢复: orderId={}, goodsId={}, currentStatus={}",
+                        orderId, order.getGoodsId(), latest.getStatus());
+                throw new OrderBusinessException(409,
+                        "订单已取消，但商品当前状态为[" + latest.getStatus() + "]，无法自动恢复为在售，请联系平台处理");
+            }
         }
 
         // 信用联动：卖家确认前取消不扣分；卖家确认后(WAIT_MEET阶段)取消，发起违约方扣1分，cancel_count + 1
@@ -279,12 +295,15 @@ public class OrderServiceImpl implements OrderService {
         order.setUpdatedTime(now);
         tradeOrderMapper.updateById(order);
 
-        // 更新商品状态为 SOLD
-        Goods goods = goodsMapper.selectById(order.getGoodsId());
-        if (goods != null) {
-            goods.setStatus("SOLD");
-            goods.setUpdatedTime(now);
-            goodsMapper.updateById(goods);
+        // 更新商品状态为 SOLD：定点更新 + 前置条件（UPDATE goods SET status='SOLD' WHERE id=? AND status='LOCKED'）
+        int sold = goodsMapper.markSold(order.getGoodsId());
+        if (sold <= 0) {
+            Goods latest = goodsMapper.selectById(order.getGoodsId());
+            String currentStatus = (latest != null) ? String.valueOf(latest.getStatus()) : "记录已不存在";
+            log.error("订单完成但商品未能置为已售出: orderId={}, goodsId={}, currentStatus={}",
+                    orderId, order.getGoodsId(), currentStatus);
+            throw new OrderBusinessException(409,
+                    "订单已完成，但商品当前状态为[" + currentStatus + "]，无法标记为已售出，请联系平台处理");
         }
 
         // 买家与卖家双方信用积分 + 2, completed_count + 1, trade_count + 1, 并沉淀审计流水
@@ -474,30 +493,6 @@ public class OrderServiceImpl implements OrderService {
                 .createdTime(order.getCreatedTime())
                 .updatedTime(order.getUpdatedTime())
                 .build();
-    }
-
-    private void incrementTradeCount(Long userId) {
-        if (userId == null) {
-            return;
-        }
-        UserCredit credit = userCreditMapper.selectOne(
-                new LambdaQueryWrapper<UserCredit>().eq(UserCredit::getUserId, userId)
-        );
-        if (credit == null) {
-            credit = UserCredit.builder()
-                    .userId(userId)
-                    .creditScore(100)
-                    .tradeCount(1)
-                    .goodReviewCount(0)
-                    .badReviewCount(0)
-                    .createdTime(LocalDateTime.now())
-                    .build();
-            userCreditMapper.insert(credit);
-        } else {
-            int currentCount = credit.getTradeCount() != null ? credit.getTradeCount() : 0;
-            credit.setTradeCount(currentCount + 1);
-            userCreditMapper.updateById(credit);
-        }
     }
 
     private String generateOrderNo() {

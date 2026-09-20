@@ -65,6 +65,31 @@ class CampusTradeStage4B2Tests {
     private static final Long TEST_BUYER_ID = 4002L;
     private static final Long TEST_THIRD_PARTY_ID = 4003L;
 
+    /**
+     * 阶段 4 加固后 goods.seller_id / trade_order.buyer_id / trade_order.seller_id 均有外键约束
+     * （见 V10__data_integrity_constraints.sql），测试夹具必须先落真实的用户行，
+     * 否则插入商品/订单会因外键校验失败。此前这些 ID 只存在于内存中，是测试数据本身的悬空引用。
+     */
+    @BeforeEach
+    void ensureReferencedUsersExist() {
+        initUserIfAbsent(TEST_SELLER_ID, "stage4b2_seller");
+        initUserIfAbsent(TEST_BUYER_ID, "stage4b2_buyer");
+        initUserIfAbsent(TEST_THIRD_PARTY_ID, "stage4b2_third");
+    }
+
+    private void initUserIfAbsent(Long id, String username) {
+        Integer exists = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM campus_trade.\"user\" WHERE id = ?", Integer.class, id);
+        if (exists != null && exists > 0) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now();
+        jdbcTemplate.update(
+                "INSERT INTO campus_trade.\"user\" (id, username, password, nickname, role, status, created_time, updated_time) "
+                        + "VALUES (?, ?, ?, ?, 'USER', 'ACTIVE', ?, ?)",
+                id, username, "$2a$10$abcdefghijklmnopqrstuvwxyz1234567890", username, now, now);
+    }
+
     private Long createTestGoods(String status, BigDecimal price) {
         Goods goods = Goods.builder()
                 .sellerId(TEST_SELLER_ID)

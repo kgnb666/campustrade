@@ -44,22 +44,13 @@ public class BrowseHistoryServiceImpl implements BrowseHistoryService {
             return;
         }
 
-        BrowseHistory existing = browseHistoryMapper.selectOne(
-                new LambdaQueryWrapper<BrowseHistory>()
-                        .eq(BrowseHistory::getUserId, userId)
-                        .eq(BrowseHistory::getGoodsId, goodsId)
-        );
-
-        if (existing != null) {
-            existing.setBrowseTime(LocalDateTime.now());
-            browseHistoryMapper.updateById(existing);
-        } else {
-            BrowseHistory history = BrowseHistory.builder()
-                    .userId(userId)
-                    .goodsId(goodsId)
-                    .browseTime(LocalDateTime.now())
-                    .build();
-            browseHistoryMapper.insert(history);
+        // 单语句 upsert：并发首次浏览同一商品时，"先查后插"会撞 uk_browse_history_user_goods
+        // 唯一约束并冒泡成 500（PostgreSQL 下事务还会被打成 aborted）。upsert 天然幂等，
+        // 重复浏览等价于把 browse_time 刷新为最新时间，与旧行为一致。
+        LocalDateTime now = LocalDateTime.now();
+        int affected = browseHistoryMapper.upsertBrowseHistory(userId, goodsId, now);
+        if (affected <= 0) {
+            log.warn("浏览足迹写入未影响任何行（预期 1 行）: userId={}, goodsId={}", userId, goodsId);
         }
     }
 

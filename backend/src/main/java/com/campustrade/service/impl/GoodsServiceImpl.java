@@ -1,6 +1,7 @@
 package com.campustrade.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.campustrade.common.constant.RedisKeyConstants;
@@ -22,12 +23,14 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -53,6 +56,15 @@ public class GoodsServiceImpl implements GoodsService {
     private final FavoriteService favoriteService;
 
     private static final String VIEW_KEY_PREFIX = RedisKeyConstants.GOODS_VIEW_PREFIX;
+
+    /** 浏览量刷盘分布式锁的持有时长（秒）：防止实例崩溃后锁无法释放；正常执行远小于该时长。 */
+    private static final long VIEW_SYNC_LOCK_TTL_SECONDS = 120L;
+
+    /** 仅当锁值仍为自己的令牌时才删除，保证"谁加锁谁解锁"。 */
+    private static final DefaultRedisScript<Long> RELEASE_LOCK_SCRIPT = new DefaultRedisScript<>(
+            "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+            Long.class
+    );
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -341,35 +353,45 @@ public class GoodsServiceImpl implements GoodsService {
             throw new BusinessException(400, "商品处于交易中或已售出，禁止修改或删除");
         }
 
-        // 更新基础属性
+        // 定点更新：只写调用方真正提交的字段。
+        // 旧实现是"把整行读出来 → 改若干字段 → updateById(实体)"，在 NOT_NULL 策略下会把读取时刻的
+        // status / view_count / price 等全部非空字段一起写回，覆盖并发提交（例如下单锁货、浏览量同步）。
+        LambdaUpdateWrapper<Goods> updateWrapper = new LambdaUpdateWrapper<Goods>()
+                .eq(Goods::getId, id)
+                // 条件前置：编辑期间若商品被并发锁单/售出，本次更新必须整体失败
+                .notIn(Goods::getStatus, "LOCKED", "SOLD")
+                .set(Goods::getUpdatedTime, LocalDateTime.now());
+
         if (StringUtils.hasText(dto.getTitle())) {
-            goods.setTitle(dto.getTitle());
+            updateWrapper.set(Goods::getTitle, dto.getTitle());
         }
         if (dto.getDescription() != null) {
-            goods.setDescription(dto.getDescription());
+            updateWrapper.set(Goods::getDescription, dto.getDescription());
         }
         if (dto.getCategoryId() != null) {
             Category category = categoryMapper.selectById(dto.getCategoryId());
             if (category == null || category.getStatus() != 1) {
                 throw new BusinessException(400, "指定的商品分类无效");
             }
-            goods.setCategoryId(dto.getCategoryId());
+            updateWrapper.set(Goods::getCategoryId, dto.getCategoryId());
         }
         if (dto.getPrice() != null) {
-            goods.setPrice(dto.getPrice());
+            updateWrapper.set(Goods::getPrice, dto.getPrice());
         }
         if (dto.getOriginalPrice() != null) {
-            goods.setOriginalPrice(dto.getOriginalPrice());
+            updateWrapper.set(Goods::getOriginalPrice, dto.getOriginalPrice());
         }
         if (StringUtils.hasText(dto.getConditionLevel())) {
-            goods.setConditionLevel(dto.getConditionLevel());
+            updateWrapper.set(Goods::getConditionLevel, dto.getConditionLevel());
         }
         if (dto.getLocation() != null) {
-            goods.setLocation(dto.getLocation());
+            updateWrapper.set(Goods::getLocation, dto.getLocation());
         }
 
-        goods.setUpdatedTime(LocalDateTime.now());
-        goodsMapper.updateById(goods);
+        int affected = goodsMapper.update(null, updateWrapper);
+        if (affected <= 0) {
+            throw goodsStatusConflict(id, "修改");
+        }
 
         // 如果传入了新的图片列表，重新替换
         if (dto.getImages() != null) {
@@ -420,10 +442,11 @@ public class GoodsServiceImpl implements GoodsService {
             throw new BusinessException(400, "商品处于交易中或已售出，禁止修改或删除");
         }
 
-        // 逻辑删除: 状态变更为 OFF_SHELF
-        goods.setStatus("OFF_SHELF");
-        goods.setUpdatedTime(LocalDateTime.now());
-        goodsMapper.updateById(goods);
+        // 逻辑删除: 状态变更为 OFF_SHELF（定点更新 + 前置条件，避免整行回写覆盖并发状态）
+        int affected = goodsMapper.updateStatusIfTradable(id, "OFF_SHELF");
+        if (affected <= 0) {
+            throw goodsStatusConflict(id, "下架");
+        }
         log.info("用户 [{}] 逻辑删除商品 ID=[{}]", userId, id);
     }
 
@@ -452,10 +475,13 @@ public class GoodsServiceImpl implements GoodsService {
             throw new BusinessException(400, "仅支持修改为 ON_SALE (上架) 或 OFF_SHELF (下架) 状态");
         }
 
-        goods.setStatus(status.toUpperCase());
-        goods.setUpdatedTime(LocalDateTime.now());
-        goodsMapper.updateById(goods);
-        log.info("用户 [{}] 修改商品 ID=[{}] 状态为 [{}]", userId, id, goods.getStatus());
+        // 定点更新 + 前置条件：仅当商品既非交易中(LOCKED)也非已售出(SOLD)时才允许上下架
+        String targetStatus = status.toUpperCase();
+        int affected = goodsMapper.updateStatusIfTradable(id, targetStatus);
+        if (affected <= 0) {
+            throw goodsStatusConflict(id, "变更上下架状态");
+        }
+        log.info("用户 [{}] 修改商品 ID=[{}] 状态为 [{}]", userId, id, targetStatus);
     }
 
     @Override
@@ -472,6 +498,21 @@ public class GoodsServiceImpl implements GoodsService {
         );
 
         return convertToVOList(myGoods);
+    }
+
+    /**
+     * 状态条件更新未命中（受影响行数为 0）时，回读真实状态并给出<b>指向真实原因</b>的业务异常。
+     *
+     * <p>刻意不复用"商品已被锁定"这类笼统文案：0 行的真实原因可能是被并发下单锁定、已被售出、
+     * 已被管理员下架、或记录已被删除，错误信息必须能直接回答"到底发生了什么"。</p>
+     */
+    private BusinessException goodsStatusConflict(Long goodsId, String action) {
+        Goods latest = goodsMapper.selectById(goodsId);
+        String currentStatus = (latest != null) ? String.valueOf(latest.getStatus()) : "记录已不存在";
+        log.warn("商品状态条件更新未命中（0 行受影响）: goodsId={}, action={}, currentStatus={}",
+                goodsId, action, currentStatus);
+        return new BusinessException(409,
+                String.format("商品状态在本次%s期间已被并发变更（当前状态: %s），请刷新后重试", action, currentStatus));
     }
 
     private Long getCurrentUserId() {
@@ -498,10 +539,46 @@ public class GoodsServiceImpl implements GoodsService {
 
     @Override
     public void syncViewCounts() {
-        // 采用 Set pop 批量消费脏商品 ID，保证 O(1) 批量弹出，彻底杜绝 keys(*) 阻塞主线程
+        // 多实例互斥：定时任务在集群每个节点上都会触发，若不加锁，两个实例可能同时消费同一批增量，
+        // 造成 Redis 增量被重复扣减（浏览量丢失）。这里用 Redis SET NX PX 做分布式互斥，
+        // 未抢到锁的实例直接让出本次执行，由持锁实例完成刷盘。
+        String lockKey = RedisKeyConstants.goodsViewSyncLockKey();
+        String lockToken = UUID.randomUUID().toString();
+        if (!tryAcquireSyncLock(lockKey, lockToken)) {
+            log.warn("未获取到浏览量刷盘分布式锁，跳过本次同步（其他实例正在执行）: lockKey={}", lockKey);
+            return;
+        }
+        try {
+            doSyncViewCounts();
+        } finally {
+            releaseSyncLock(lockKey, lockToken);
+        }
+    }
+
+    /**
+     * 浏览量增量落盘核心流程（已持有分布式锁）。
+     *
+     * <h2>失败可重入设计</h2>
+     * 顺序严格为「先写库成功，再扣减 Redis 增量」：
+     * <ol>
+     *   <li>从脏集合 pop 出商品 ID（pop 本身是原子消费，同一 ID 不会被两个消费者同时拿到）；</li>
+     *   <li>读取该商品的 Redis 增量 delta；</li>
+     *   <li>用 {@code view_count = view_count + delta} 定点更新数据库；</li>
+     *   <li><b>仅当第 3 步成功</b>才 DECRBY 扣减 Redis 增量；</li>
+     *   <li>任何异常（DB 连接中断、锁等待超时、约束冲突等）都把商品 ID 放回脏集合并<b>保留增量</b>，
+     *       下一轮同步会重新消费，因此增量既不丢失也不会重复计算。</li>
+     * </ol>
+     * 若扣减后 Redis 仍有剩余增量（说明刷盘期间又有新浏览累加），同样把 ID 放回脏集合，
+     * 保证"最后一次增量"也有机会落盘，不需要等到用户下次访问才被顺带同步。
+     */
+    private void doSyncViewCounts() {
         final int batchSize = 100;
-        while (true) {
-            List<String> dirtyGoodsIds = null;
+        // 防御性上限：避免脏集合被持续灌入时本方法长时间占用线程
+        final int maxBatches = 50;
+        int batchCount = 0;
+
+        while (batchCount++ < maxBatches) {
+            List<String> dirtyGoodsIds;
             try {
                 dirtyGoodsIds = stringRedisTemplate.opsForSet().pop(RedisKeyConstants.GOODS_VIEW_DIRTY_IDS, batchSize);
             } catch (Exception e) {
@@ -514,32 +591,120 @@ public class GoodsServiceImpl implements GoodsService {
             }
 
             for (String goodsIdStr : dirtyGoodsIds) {
-                if (!StringUtils.hasText(goodsIdStr)) continue;
-                String key = VIEW_KEY_PREFIX + goodsIdStr;
-                try {
-                    Long goodsId = Long.parseLong(goodsIdStr);
-                    String val = stringRedisTemplate.opsForValue().get(key);
-                    if (val != null) {
-                        int delta = Integer.parseInt(val);
-                        if (delta > 0) {
-                            Goods goods = goodsMapper.selectById(goodsId);
-                            if (goods != null) {
-                                int currentViews = goods.getViewCount() != null ? goods.getViewCount() : 0;
-                                goods.setViewCount(currentViews + delta);
-                                goodsMapper.updateById(goods);
-                                // 扣减已持久化的 delta
-                                stringRedisTemplate.opsForValue().decrement(key, delta);
-                            }
-                        }
-                    }
-                } catch (Exception e) {
-                    log.error("同步商品浏览量缓存失败: goodsId={}", goodsIdStr, e);
+                if (!StringUtils.hasText(goodsIdStr)) {
+                    continue;
                 }
+                syncSingleGoodsViewCount(goodsIdStr);
             }
 
             if (dirtyGoodsIds.size() < batchSize) {
                 break;
             }
+        }
+
+        if (batchCount > maxBatches) {
+            log.warn("浏览量刷盘达到单次批次数上限({}), 剩余脏商品将留待下一轮同步", maxBatches);
+        }
+    }
+
+    /**
+     * 单个商品的增量落盘：写库成功后才扣减 Redis 增量，失败则回灌脏集合并保留增量。
+     */
+    private void syncSingleGoodsViewCount(String goodsIdStr) {
+        String viewKey = VIEW_KEY_PREFIX + goodsIdStr;
+        Long goodsId;
+        try {
+            goodsId = Long.parseLong(goodsIdStr);
+        } catch (NumberFormatException e) {
+            log.warn("脏集合中存在非法的商品 ID，已丢弃: goodsIdStr={}", goodsIdStr);
+            return;
+        }
+
+        int delta;
+        try {
+            String val = stringRedisTemplate.opsForValue().get(viewKey);
+            if (val == null) {
+                // 增量键已不存在（被清理或从未写入）：无需落盘，也无需回灌
+                return;
+            }
+            delta = Integer.parseInt(val.trim());
+        } catch (Exception e) {
+            log.warn("读取 Redis 浏览量增量失败，商品 ID 放回脏集合等待下轮重试: goodsId={}, error={}", goodsIdStr, e.getMessage());
+            markViewDirty(goodsIdStr);
+            return;
+        }
+
+        if (delta <= 0) {
+            // 增量已为 0 或异常负值：无需落盘
+            return;
+        }
+
+        try {
+            // 定点更新：只动 view_count 与 updated_time，绝不回写 status 等其它列
+            int affected = goodsMapper.incrementViewCount(goodsId, delta);
+            if (affected <= 0) {
+                // 商品不存在（已被物理删除）：增量永远无法落盘，清理残留计数避免脏集合被永久反复消费
+                log.warn("浏览量增量对应的商品不存在，已清理无效增量: goodsId={}, abandonedDelta={}", goodsId, delta);
+                stringRedisTemplate.delete(viewKey);
+                return;
+            }
+
+            // 写库成功后才扣减 Redis 增量：这一步失败也不会丢数据（增量仍留在 Redis，ID 仍在脏集合）
+            Long remaining = stringRedisTemplate.opsForValue().decrement(viewKey, delta);
+            if (remaining != null && remaining > 0) {
+                // 刷盘期间又有新浏览累加：把 ID 放回脏集合，确保剩下的增量也能被落盘
+                markViewDirty(goodsIdStr);
+                log.debug("浏览量刷盘期间有新增量写入，商品 ID 已重新登记脏集合: goodsId={}, remainingDelta={}",
+                        goodsId, remaining);
+            }
+            log.debug("商品浏览量增量落盘成功: goodsId={}, delta={}", goodsId, delta);
+        } catch (Exception e) {
+            // 写库失败：把商品 ID 放回脏集合、保留 Redis 增量，下一轮重试，增量不丢失
+            markViewDirty(goodsIdStr);
+            log.error("商品浏览量增量落盘失败，商品 ID 已放回脏集合并保留增量待重试: goodsId={}, delta={}",
+                    goodsId, delta, e);
+        }
+    }
+
+    /**
+     * 把商品 ID 重新登记进脏集合（失败重试与剩余增量回灌共用）。
+     * 登记失败只记录日志：Redis 不可用时用户访问详情页本身也无法累加，不会产生新的增量。
+     */
+    private void markViewDirty(String goodsIdStr) {
+        try {
+            stringRedisTemplate.opsForSet().add(RedisKeyConstants.GOODS_VIEW_DIRTY_IDS, goodsIdStr);
+        } catch (Exception e) {
+            log.error("重新登记浏览量脏商品 ID 失败，该增量将在下次用户浏览该商品时才会被重新登记: goodsId={}", goodsIdStr, e);
+        }
+    }
+
+    /**
+     * 尝试获取刷盘分布式锁（SET key token NX PX ttl）。
+     */
+    private boolean tryAcquireSyncLock(String lockKey, String lockToken) {
+        try {
+            Boolean acquired = stringRedisTemplate.opsForValue()
+                    .setIfAbsent(lockKey, lockToken, VIEW_SYNC_LOCK_TTL_SECONDS, TimeUnit.SECONDS);
+            return Boolean.TRUE.equals(acquired);
+        } catch (Exception e) {
+            log.error("获取浏览量刷盘分布式锁失败（Redis 异常），本次放弃同步以避免多实例重复扣减: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 释放刷盘分布式锁：仅当锁值等于自己的令牌时删除（Lua 保证 get + del 原子），
+     * 避免任务超时后误删其他实例刚抢到的锁。
+     */
+    private void releaseSyncLock(String lockKey, String lockToken) {
+        try {
+            stringRedisTemplate.execute(
+                    RELEASE_LOCK_SCRIPT,
+                    Collections.singletonList(lockKey),
+                    lockToken
+            );
+        } catch (Exception e) {
+            log.warn("释放浏览量刷盘分布式锁失败（将由 TTL 自动过期）: lockKey={}, error={}", lockKey, e.getMessage());
         }
     }
 

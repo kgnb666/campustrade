@@ -1,6 +1,7 @@
 package com.campustrade.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.IdWorker;
 import com.campustrade.common.Result;
 import com.campustrade.common.ResultCode;
 import com.campustrade.common.constant.RedisKeyConstants;
@@ -8,7 +9,6 @@ import com.campustrade.dto.LoginRequestDTO;
 import com.campustrade.dto.RefreshTokenRequest;
 import com.campustrade.dto.RegisterRequestDTO;
 import com.campustrade.entity.User;
-import com.campustrade.entity.UserCredit;
 import com.campustrade.exception.BusinessException;
 import com.campustrade.mapper.UserCreditMapper;
 import com.campustrade.mapper.UserMapper;
@@ -23,6 +23,7 @@ import com.campustrade.vo.UserProfileVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -106,20 +107,21 @@ public class AuthServiceImpl implements AuthService {
                 .updatedTime(now)
                 .build();
 
-        userMapper.insert(user);
+        // 第 1、2 步的"先查后插"校验在并发注册（同一用户名/邮箱双击提交、脚本重放）下可能双双通过，
+        // 此时由 user_username_key / user_email_key 唯一约束兜底。数据库唯一冲突必须翻译为
+        // 400 业务语义（用户名/邮箱已被占用），而不是让它冒泡成 500。
+        try {
+            userMapper.insert(user);
+        } catch (DuplicateKeyException e) {
+            String message = describeDuplicateRegistration(e, dto);
+            log.warn("并发注册被唯一约束拦截: username={}, email={}, message={}", dto.getUsername(), dto.getEmail(), message);
+            throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), message);
+        }
         log.info("新用户注册成功: userId={}, username={}", user.getId(), user.getUsername());
 
         // 4. 自动生成用户初始信用档案 (credit_score = 100)
-        UserCredit userCredit = UserCredit.builder()
-                .userId(user.getId())
-                .creditScore(100)
-                .tradeCount(0)
-                .goodReviewCount(0)
-                .badReviewCount(0)
-                .createdTime(now)
-                .build();
-
-        userCreditMapper.insert(userCredit);
+        //    单语句 INSERT ... ON CONFLICT (user_id) DO NOTHING：并发下不会抛唯一键异常污染事务。
+        userCreditMapper.insertCreditIfAbsent(IdWorker.getId(), user.getId());
         log.info("为新用户建立初始信用档案: userId={}, creditScore=100", user.getId());
 
         return Result.success("注册成功", null);
@@ -268,6 +270,25 @@ public class AuthServiceImpl implements AuthService {
     // =========================================================================
     // 内部防护与 Redis 辅助方法
     // =========================================================================
+
+    /**
+     * 把 PostgreSQL 唯一约束冲突翻译为"用户可读且指向真实原因"的业务提示。
+     *
+     * <p>注册表上有两个唯一约束：{@code user_username_key} 与 {@code user_email_key}，
+     * 二者的冲突原因不同（占用用户名 / 占用邮箱），不能笼统回复"数据冲突"。</p>
+     */
+    private String describeDuplicateRegistration(DuplicateKeyException e, RegisterRequestDTO dto) {
+        String detail = e.getMostSpecificCause() != null ? e.getMostSpecificCause().getMessage() : e.getMessage();
+        String safeDetail = detail == null ? "" : detail.toLowerCase();
+        if (safeDetail.contains("user_email_key") || safeDetail.contains("email")) {
+            return "该邮箱已被注册，请直接登录";
+        }
+        if (safeDetail.contains("user_username_key") || safeDetail.contains("username")) {
+            return "用户名已被占用，请更换其他用户名";
+        }
+        log.warn("注册唯一约束冲突原因无法归类，按用户名占用处理: username={}, email={}", dto.getUsername(), dto.getEmail());
+        return "用户名或邮箱已被占用，请更换后重试";
+    }
 
     /**
      * 写入/覆盖 Refresh Token 会话：Redis 中只保存令牌的 SHA-256 摘要，不保存令牌明文。
