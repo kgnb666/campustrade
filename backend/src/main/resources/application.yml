@@ -1,0 +1,90 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: campus-trade-backend
+
+  # 数据库配置 (PostgreSQL 16)
+  datasource:
+    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://${SPRING_DATASOURCE_HOST:127.0.0.1}:${SPRING_DATASOURCE_PORT:15435}/${SPRING_DATASOURCE_DATABASE:campustrade}?currentSchema=${SPRING_DATASOURCE_SCHEMA:campus_trade}&reWriteBatchedInserts=true
+    username: ${SPRING_DATASOURCE_USERNAME:campustrade}
+    password: ${SPRING_DATASOURCE_PASSWORD:campustrade123}
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # Flyway 数据库迁移管理
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    schemas: campus_trade
+    default-schema: campus_trade
+    locations: classpath:db/migration
+    out-of-order: false
+
+  # Redis 配置 (Redis 7)
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:127.0.0.1}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+      password: ${SPRING_DATA_REDIS_PASSWORD:}
+      timeout: 5000ms
+
+  # 文件上传限制
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 20MB
+
+# MinIO 对象存储配置
+minio:
+  endpoint: ${MINIO_ENDPOINT:http://127.0.0.1:9000}
+  access-key: ${MINIO_ROOT_USER:campustrade}
+  secret-key: ${MINIO_ROOT_PASSWORD:campustrade123}
+  bucket-name: ${MINIO_BUCKET_NAME:campustrade}
+  url-prefix: ${MINIO_URL_PREFIX:http://127.0.0.1:9000/campustrade}
+
+# JWT 认证配置
+jwt:
+  secret: ${JWT_SECRET:campustrade-super-secure-jwt-secret-key-2026-campus-trade-platform-xyz-token}
+  access-token-expiration: 7200000 # 2小时 (毫秒)
+  refresh-token-expiration: 604800000 # 7天 (毫秒)
+
+# MyBatis-Plus 配置
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.campustrade.entity
+  type-enums-package: com.campustrade.enums
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    db-config:
+      schema: campus_trade
+      table-prefix: ""
+      id-type: assign_id
+
+# DeepSeek AI 开放接口配置
+deepseek:
+  api-key: ${DEEPSEEK_API_KEY:your_deepseek_api_key_here}
+  base-url: ${DEEPSEEK_BASE_URL:https://api.deepseek.com/v1}
+  model: ${DEEPSEEK_MODEL:deepseek-chat}
+  timeout: ${DEEPSEEK_TIMEOUT:15000}
+
+# 日志配置
+logging:
+  level:
+    root: INFO
+    com.campustrade: DEBUG
+    org.springframework.web: INFO
+    com.baomidou.mybatisplus: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

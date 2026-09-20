@@ -1,0 +1,24 @@
+# ==============================================================================
+#  测试环境覆盖配置（profile: test）
+#
+#  基础设施由 Testcontainers 提供，全部是"每个测试 JVM 拉起的全新一次性容器"：
+#    - PostgreSQL : postgres:16，全新实例 + Flyway 从 V1 迁移到 V9（干净库）
+#    - Redis      : redis:7
+#    - MinIO      : minio/minio，测试桶 campustrade-test
+#  端口在运行时随机分配，所以 datasource / redis / flyway / mybatis-plus schema 等连接类配置
+#  一律不在这里写死，而是由 com.campustrade.support.TestContainersConfig 在启动容器后自动注入
+#  （详见该类顶部注释）。
+#
+#  本文件只保留"与基础设施无关"的覆盖项。
+# ==============================================================================
+
+minio:
+  # 测试专用桶（endpoint / access-key / secret-key 由容器动态注入）。
+  # 桶不存在时 MinioConfig 会自动创建，因此无需预先建桶。
+  bucket-name: campustrade-test
+
+logging:
+  level:
+    # 测试期间降低噪音，但保留业务包 DEBUG 便于定位失败原因
+    root: WARN
+    com.campustrade: DEBUG

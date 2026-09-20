@@ -1,0 +1,6 @@
+# 注册测试用的 ContextCustomizerFactory：在上下文 refresh 之前注入由 Testcontainers 容器决定的
+# MinIO 动态属性（spring Boot 3.3.4 / Spring Framework 6.1.13 无 DynamicPropertyRegistrar 可用，
+# 而 @DynamicPropertySource 只能写在测试类上）。
+# 该文件只存在于测试 classpath，不影响生产构建产物。
+org.springframework.test.context.ContextCustomizerFactory=\
+com.campustrade.support.TestContainersConfig$MinioContextCustomizerFactory

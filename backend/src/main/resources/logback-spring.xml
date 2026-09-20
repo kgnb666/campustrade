@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  日志基础设施：控制台 + 按天滚动文件，两者都强制 UTF-8（Windows GBK 控制台下不再出现中文乱码）。
+  注意：这里只定义 appender，日志级别仍由 application.yml 的 logging.level.* 控制，
+  避免出现"配置文件与 application.yml 两处各写一份级别"的漂移。
+-->
+<configuration>
+
+    <!-- 日志目录可用环境变量 LOG_DIR 覆盖，默认写到运行目录下的 logs/ -->
+    <property name="LOG_DIR" value="${LOG_DIR:-logs}"/>
+    <property name="LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-no-trace}] %logger{36} - %msg%n"/>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/campustrade.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/campustrade.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <!-- 保留 14 天，容器/本机都不会无限增长 -->
+            <maxHistory>14</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+
+</configuration>
