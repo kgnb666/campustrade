@@ -1,0 +1,56 @@
+# ==============================================================================
+#  CampusTrade 边缘 Nginx（叠加编排）
+#
+#  与 docker-compose.prod.yml 一起使用（同一个 compose project，因此能直接
+#  用服务名访问 app / minio，并共享 campustrade-prod-network）：
+#
+#      cd /opt/campustrade
+#      docker compose -f docker-compose.prod.yml \
+#                     -f deploy/docker-compose.edge.yml \
+#                     --env-file /etc/campustrade/prod.env up -d
+#
+#  注意：compose 的相对路径以"第一个 -f 文件所在目录"（本仓库根目录）为基准解析，
+#  因此下面写的是 ./deploy/nginx/... 而不是 ./nginx/...。
+#
+#  对外只发布一个端口（默认 8080）：
+#     /      前端静态产物（宿主目录 WEB_ROOT -> 容器内 /usr/share/nginx/html）
+#     /api/  反代 app:8081
+#     /img/  反代 minio:9000（商品图片）
+# ==============================================================================
+name: campustrade-prod
+
+services:
+  edge:
+    image: nginx:1.27-alpine
+    container_name: campustrade-prod-edge
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      # 只监听一个宿主端口；要换端口改 EDGE_PORT，要只给本机访问用 EDGE_BIND=127.0.0.1
+      - "${EDGE_BIND:-0.0.0.0}:${EDGE_PORT:-8080}:80"
+    volumes:
+      - ./deploy/nginx/campustrade.conf:/etc/nginx/conf.d/default.conf:ro
+      # 前端 Web 产物目录（flutter build web --release 的输出）
+      - ${WEB_ROOT:-/opt/campustrade/web}:/usr/share/nginx/html:ro
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256m
+    networks:
+      - campustrade-prod-network
