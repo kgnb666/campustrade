@@ -142,15 +142,38 @@ function Start-BackendService {
     # 不要在本文件里拼接 "set JAVA_HOME=... &"：cmd 会把 & 前的空格并入变量值，
     # Maven 会因 JAVA_HOME 无效而直接退出。
     Start-Process -FilePath "cmd.exe" -WorkingDirectory $backendDir -ArgumentList "/k", "title CampusTrade Backend && run-backend.cmd"
-    Write-Host "[*] 等待后端端口 8080 监听 (最长 120 秒)..." -NoNewline
+    Write-Host "[*] 等待本项目后端监听 8080 (最长 120 秒)..." -NoNewline
+    # 就绪判据必须是"8080 的持有者 = 本项目后端"，而不是"8080 有人监听"。
+    # 否则会出现这类假成功：检查时端口空闲 → 拉起后端 → 期间别的程序抢占了 8080
+    # → 轮询看到"有人监听"就报成功，而我们的后端其实早就因端口被占退出了（实测发生过）。
     $attempts = 0
-    while (-not (Test-BackendPort) -and ($attempts -lt 60)) {
+    $ready = $false
+    $hijackedBy = $null
+    while ($attempts -lt 60) {
+        $currentOwner = Get-BackendPortOwner
+        if ($currentOwner) {
+            if ($currentOwner.CommandLine -like "*com.campustrade.CampusTradeApplication*") {
+                $ready = $true
+                break
+            }
+            $hijackedBy = $currentOwner
+            break
+        }
         Start-Sleep -Seconds 2
         Write-Host "." -NoNewline
         $attempts++
     }
-    if (Test-BackendPort) {
+
+    if ($ready) {
         Write-Host "`n[成功] 后端服务已就绪！(http://127.0.0.1:8080/api)" -ForegroundColor Green
+    } elseif ($hijackedBy) {
+        # 端口在启动过程中被别人抢走：明确报错，绝不报成功
+        $appClass = if ($hijackedBy.CommandLine -match '([\w.]+Application)') { $Matches[1] } else { $hijackedBy.Name }
+        Write-Host "`n[错误] 端口 8080 在本项目后端启动过程中被其它程序占用，后端无法监听。" -ForegroundColor Red
+        Write-Host "       占用进程: $appClass (PID $($hijackedBy.ProcessId))" -ForegroundColor Red
+        Write-Host "       请停止该程序后重试，或为两个项目分配不同端口。" -ForegroundColor Red
+        $script:backendOk = $false
+        $script:failed = $true
     } else {
         Write-Host "`n[错误] 后端启动超时。请查看 `"CampusTrade Backend`" 窗口中的报错信息。" -ForegroundColor Red
         $script:backendOk = $false
