@@ -24,6 +24,10 @@ backend/.mvn/wrapper/maven-wrapper.jar
 # Frontend build artifacts
 frontend/.dart_tool/
 frontend/build/
+
+# 服务器侧部署产物目录（deploy/README.md 里的 WEB_ROOT，由 flutter build web 产出，
+# 只存在于服务器 /opt/campustrade/web，绝不入库）
+/web/
 frontend/.flutter-plugins
 frontend/.flutter-plugins-dependencies
 frontend/.packages
