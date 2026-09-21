@@ -132,15 +132,30 @@ sudo docker compose -f docker-compose.prod.yml -f deploy/docker-compose.edge.yml
    挂进容器，删除再 `mkdir` 会让容器继续指向被删掉的旧 inode，表现为首页 403、
    静态资源 404。正确做法是把文件解压/覆盖到目录**内部**；万一已经删了，
    `$COMPOSE up -d --force-recreate edge` 重建容器即可。
-2. **compose 相对路径以"第一个 `-f` 文件所在目录"为基准**：因此
+2. **单文件 bind mount 改内容不生效**：同样的 inode 问题。`deploy/nginx/` 之前是
+   按单文件挂载的，用 `scp` 覆盖 `campustrade.conf` 后容器里仍是旧文件
+   （`nginx -t` 通过但配置没变）。现已改为挂载**整个目录**
+   （`./deploy/nginx:/etc/nginx/conf.d:ro`），目录内文件的增删改都能被容器看到；
+   若沿用单文件挂载，改完必须 `--force-recreate`。
+3. **入口文件不能长缓存**：Flutter Web 的 `main.dart.js` 文件名**不带内容哈希**，
+   早期配置给它打了 `immutable, max-age=30d`，会导致"发版后老用户永远拿到旧前端"。
+   现在入口文件（`index.html` / `main.dart.js` / `flutter*.js` / `version.json` /
+   `manifest.json`）统一 `no-cache`（回源校验，未变则 304），其余资源仍长缓存。
+4. **compose 相对路径以"第一个 `-f` 文件所在目录"为基准**：因此
    `deploy/docker-compose.edge.yml` 里写的是 `./deploy/nginx/...`，
    并且必须在仓库根目录执行 `docker compose`。
-3. **不要省掉 `--env-file`**：compose 默认读仓库根目录的 `.env`（开发口令），
+5. **不要省掉 `--env-file`**：compose 默认读仓库根目录的 `.env`（开发口令），
    `ProdSecretsGuard` 会因此拒绝启动（这是它的设计目的）。
-4. **MinIO 镜像别用国内镜像源拉**：`mirror.ccs.tencentyun.com` 在 OCI referrers
+6. **MinIO 镜像别用国内镜像源拉**：`mirror.ccs.tencentyun.com` 在 OCI referrers
    接口上会 `dial tcp ... i/o timeout`，用 Quay 源拉完再 `docker tag` 成 compose 里的名字。
-5. **SSH 传大文件会偶发中断**：传完务必校验（`ls` 数量 / `du -sh` / 直接 `curl` 一次），
+7. **SSH 传大文件会偶发中断**：传完务必校验（`ls` 数量 / `du -sh` / 直接 `curl` 一次），
    本项目第一次传前端产物就断了一半，页面 403 的根因就在这。
+8. **HTTP + 公网 IP 会击穿 Web 的 secure storage**：`flutter_secure_storage` 在 Web 上
+   依赖 `window.crypto.subtle`，该 API 只在安全上下文（HTTPS 或 localhost）可用。
+   站点以 `http://<公网IP>:8080` 提供时，Token 存不进去，`DioClient` 取不到 Token，
+   所有认证请求变匿名 → 401 → 被"会话失效"流程踢回登录页（现象："能登录，一点就弹回"）。
+   前端 `StorageService` 已改为三级降级（内存 → 安全存储 → SharedPreferences/localStorage），
+   HTTP 部署下也能保存登录态；**但生产仍建议上 HTTPS**（安全存储可用即不触发降级）。
 
 ---
 

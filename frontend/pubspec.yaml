@@ -40,6 +40,11 @@ dependencies:
   # 本地安全键值存储 (Token / 敏感凭证)
   flutter_secure_storage: ^9.2.2
 
+  # 降级持久化后端：flutter_secure_storage 在 Web 非安全上下文（HTTP + 公网 IP）
+  # 会整体抛错（Web Crypto / crypto.subtle 不可用），届时用它兜底
+  # （Web 上即 localStorage），保证登录态仍能保存、刷新后仍有效。
+  shared_preferences: ^2.3.2
+
   # JSON 序列化注解
   json_annotation: ^4.9.0
 
