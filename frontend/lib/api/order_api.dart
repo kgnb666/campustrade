@@ -5,6 +5,7 @@ import '../utils/api_error.dart';
 import '../models/order.dart';
 import '../utils/app_logger.dart';
 import 'dio_client.dart';
+import '../models/order_summary.dart';
 
 /// 交易订单核心网络 API 接口服务
 /// 封装与后端 /api/orders 相关的所有 REST 交互
@@ -77,6 +78,30 @@ class OrderApi {
       return ApiResponse<OrderPageResult>(
         code: 500,
         message: '订单列表加载失败，请稍后重试',
+        data: null,
+      );
+    }
+  }
+
+  /// 接口2.1: 查询当前用户自己的"待办"订单汇总（首页待办区块）
+  /// GET /api/orders/summary
+  ///
+  /// "待评价"无法由订单状态推出（要逐单查评价状态），因此由后端一条 SQL 算出三项计数。
+  /// [cancelToken] 见 [getMyOrders] 的说明。
+  Future<ApiResponse<OrderTodoSummary>> getTodoSummary({CancelToken? cancelToken}) async {
+    try {
+      final response = await _dio.get('/orders/summary', cancelToken: cancelToken);
+      return _parseApiResponse<OrderTodoSummary>(
+        response,
+        (data) => OrderTodoSummary.fromJson(data as Map<String, dynamic>),
+      );
+    } on DioException catch (e) {
+      return _handleDioException<OrderTodoSummary>(e);
+    } catch (e) {
+      AppLogger.error('[OrderApi] getTodoSummary unexpected error', error: e);
+      return ApiResponse<OrderTodoSummary>(
+        code: 500,
+        message: '待办加载失败，请稍后重试',
         data: null,
       );
     }

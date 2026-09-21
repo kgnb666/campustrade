@@ -22,6 +22,7 @@ import com.campustrade.mapper.UserMapper;
 import com.campustrade.service.CreditService;
 import com.campustrade.service.OrderService;
 import com.campustrade.service.order.OrderStateMachine;
+import com.campustrade.vo.order.OrderTodoSummaryVO;
 import com.campustrade.vo.order.OrderUserInfoVO;
 import com.campustrade.vo.order.OrderVO;
 import lombok.RequiredArgsConstructor;
@@ -430,6 +431,24 @@ public class OrderServiceImpl implements OrderService {
         }
 
         return convertToVO(order);
+    }
+
+    @Override
+    public OrderTodoSummaryVO getTodoSummary(Long userId) {
+        if (userId == null) {
+            throw new OrderBusinessException(401, "请先登录");
+        }
+        OrderTodoSummaryVO summary = tradeOrderMapper.selectTodoSummary(userId);
+        if (summary == null) {
+            // 聚合 SQL（无 GROUP BY）必然返回一行；这里只是防御性兜底，
+            // 避免任何驱动层异常让首页拿到 null 而显示成"待办加载失败"。
+            return OrderTodoSummaryVO.builder()
+                    .pendingSellerConfirm(0)
+                    .waitMeet(0)
+                    .toReview(0)
+                    .build();
+        }
+        return summary;
     }
 
     @Override

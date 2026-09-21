@@ -9,6 +9,7 @@ import com.campustrade.dto.order.OrderQueryRequest;
 import com.campustrade.entity.TradeOrder;
 import com.campustrade.entity.User;
 import com.campustrade.service.OrderService;
+import com.campustrade.vo.order.OrderTodoSummaryVO;
 import com.campustrade.vo.order.OrderVO;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -75,6 +76,21 @@ public class OrderController {
     public Result<OrderVO> getOrderDetail(@CurrentUser User user, @PathVariable("id") Long id) {
         OrderVO vo = orderService.getOrderDetail(id, user.getId());
         return Result.success("获取订单详情成功", vo);
+    }
+
+    /**
+     * 接口3.1: 查询当前用户的"待办"订单汇总 (首页待办区块)
+     * GET /orders/summary
+     * 权限：登录用户，仅统计自己的订单（SQL 里按 buyer_id/seller_id = 我 收敛，不做跨用户统计）
+     *
+     * <p>为什么不复用 {@code GET /orders/my}：列表接口按"角色 + 状态"过滤，而"待评价"
+     * 取决于评价表（我自己评过没有），无法由订单状态推出；逐单查评价会是 N+1。
+     * 这里一次返回三项计数，前端一次请求即可渲染完整个待办区块。</p>
+     */
+    @GetMapping("/summary")
+    public Result<OrderTodoSummaryVO> getTodoSummary(@CurrentUser User user) {
+        OrderTodoSummaryVO summary = orderService.getTodoSummary(user.getId());
+        return Result.success("获取待办汇总成功", summary);
     }
 
     /**

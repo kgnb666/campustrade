@@ -203,8 +203,9 @@ void main() {
     expect(find.textContaining('欢迎回来，'), findsOneWidget,
         reason: '登录成功后应回到首页并显示欢迎语');
 
-    // 3. 进入集市
-    await tester.tap(find.text('进入校园集市'));
+    // 3. 进入集市（首页"最新商品"区块底部的入口；首页已不再有开发进度说明卡）
+    await tester.ensureVisible(find.text('查看全部 →'));
+    await tester.tap(find.text('查看全部 →'));
     await tester.pumpAndSettle(const Duration(seconds: 2));
     expect(find.text('校园集市'), findsOneWidget);
 

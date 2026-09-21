@@ -5,6 +5,7 @@ import com.campustrade.dto.CreateOrderDTO;
 import com.campustrade.dto.order.CreateOrderRequest;
 import com.campustrade.dto.order.OrderQueryRequest;
 import com.campustrade.entity.TradeOrder;
+import com.campustrade.vo.order.OrderTodoSummaryVO;
 import com.campustrade.vo.order.OrderVO;
 
 /**
@@ -102,6 +103,18 @@ public interface OrderService {
      * @return OrderVO
      */
     OrderVO getOrderDetail(Long orderId, Long currentUserId);
+
+    /**
+     * 统计当前用户自己的待办订单数量 (待我确认 / 待面交 / 待评价)
+     *
+     * <p>与 {@link #getMyOrders(Long, OrderQueryRequest)} 的区别：列表接口按"角色 + 状态"
+     * 过滤，而"待评价"取决于评价表而不是订单状态，无法由列表接口推出。这里用一条聚合 SQL
+     * 一次算出三项，供首页"我的待办"使用。只统计当前用户作为买家或卖家参与的订单。</p>
+     *
+     * @param userId 当前登录用户ID
+     * @return 三项计数的汇总 VO（未登录时抛出 401 业务异常）
+     */
+    OrderTodoSummaryVO getTodoSummary(Long userId);
 
     /**
      * 将订单持久化实体转换为脱敏 VO 对象

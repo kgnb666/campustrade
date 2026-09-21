@@ -13,6 +13,7 @@ import 'package:frontend/pages/profile/student_verify_page.dart';
 import 'package:frontend/routes/app_pages.dart';
 import 'package:frontend/routes/app_routes.dart';
 import 'package:frontend/services/storage_service.dart';
+import 'package:frontend/widgets/home_search_field.dart';
 import 'package:get/get.dart' hide Response;
 
 void main() {
@@ -76,15 +77,22 @@ void main() {
     Get.reset();
   });
 
-  testWidgets('1. 验证首页渲染与能力卡片', (WidgetTester tester) async {
+  testWidgets('1. 验证首页渲染：欢迎条 + 搜索框 + 最新商品', (WidgetTester tester) async {
     await tester.pumpWidget(const CampusTradeApp());
     await tester.pumpAndSettle();
 
     expect(find.text('CampusTrade · 校园二手交易平台'), findsOneWidget);
-    // 卡片标题只描述能力，不含 "Stage N" 阶段号（见 final_config_sync_test.dart 的守护断言）
-    expect(find.text('用户中心与校园认证就绪'), findsOneWidget);
-    expect(find.text('用户登录'), findsOneWidget);
-    expect(find.text('新用户注册'), findsOneWidget);
+    // 首页是"面向用户"的可用首页：搜索框 + 最新商品，且不再有开发进度说明卡
+    // （"就绪 / Active / Ready"这类字样与实现细节名词属于开发过程信息，
+    //  见 final_config_sync_test.dart 的守护断言与 home_page_widget_test.dart）
+    expect(find.text(HomeSearchField.hintText), findsOneWidget);
+    expect(find.text('最新商品'), findsOneWidget);
+    expect(find.textContaining('用户中心与校园认证就绪'), findsNothing);
+    expect(find.textContaining('商品发布与浏览体系就绪'), findsNothing);
+    // 未登录：显示登录引导与注册/登录入口，不显示"我的待办"
+    expect(find.textContaining('登录即可体验完整的校园认证'), findsOneWidget);
+    expect(find.widgetWithText(OutlinedButton, '注册'), findsOneWidget);
+    expect(find.text('我的待办'), findsNothing);
   });
 
   testWidgets('2. 验证登录页面渲染与表单组件', (WidgetTester tester) async {

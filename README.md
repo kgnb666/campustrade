@@ -247,13 +247,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/quality-gate.ps1
 .\start.ps1 -Mode 6
 
 # 单项执行
-cd backend  && mvn -B test          # 257 项（Testcontainers 自带 PG/Redis/MinIO，不碰开发库；需要可用的 Docker）
+cd backend  && mvn -B test          # 263 项（Testcontainers 自带 PG/Redis/MinIO，不碰开发库；需要可用的 Docker）
 cd frontend && flutter analyze      # 期望 0 issue
-cd frontend && flutter test         # 187 项
+cd frontend && flutter test         # 194 项
 ```
 
-**当前基线（本批次交付时实测）**：后端 `mvn -B test` 257 项全绿；`flutter analyze` 0 issue；`flutter test` 187 项全绿。
-各阶段的测试规模变化（189 → 242 → 255 → 257 / 142 → 176 → 187）见 [CHANGELOG.md](CHANGELOG.md)。
+**当前基线（本批次交付时实测）**：后端 `mvn -B test` 263 项全绿；`flutter analyze` 0 issue；`flutter test` 194 项全绿。
+各阶段的测试规模变化（189 → 242 → 255 → 257 → 263 / 142 → 176 → 187 → 194）见 [CHANGELOG.md](CHANGELOG.md)。
 
 > **门禁前置检查**：`scripts/quality-gate.ps1` 在跑测试前会先确认 Docker 可用
 > （复用 `scripts/toolchain.ps1` 的 `Test-DockerAvailable`），不可用时打印中文原因与启动方法并以非 0 退出，
@@ -265,6 +265,46 @@ cd frontend && flutter test         # 187 项
 > （`postgres:16.15` / `redis:7.4.11` / `minio/minio:RELEASE.2024-10-13T13-34-11Z`，与 `docker-compose.yml` 一致）。
 > 同理，`scripts/quality-gate.ps1` 刻意**不加载** `.env`：若把 `.env` 的 `SPRING_DATA_REDIS_PASSWORD`
 > 导出到进程环境，测试会去给一个"没设口令的临时 Redis"发 AUTH 而失败。
+
+---
+
+## 首页与「我的待办」汇总接口
+
+首页（`frontend/lib/pages/home/home_page.dart`）是**面向用户**的可用首页，自上而下四块：
+欢迎条 → 搜索框 → 我的待办（仅登录用户） → 最新商品（最新 6 个在售商品 + 「查看全部 →」）。
+早期那两张写满实现细节与"就绪 / Active / Ready"字样的开发进度说明卡已删除
+（开发过程信息只属于提交历史与文档，不属于用户界面；`frontend/lib/widgets/status_badge.dart`
+也因此不再被任何页面引用，已一并删除）。
+
+| 区块 | 数据来源 | 跳转 |
+| :--- | :--- | :--- |
+| 搜索框（未登录可用） | 无（纯本地输入） | 集市页 `GET /goods/search` 同款入口，关键词经路由参数传入并在集市页发起搜索 |
+| 我的待办 | **`GET /api/orders/summary`**（见下） | 待我确认 → 我的订单（卖家视角 + 待确认）；待面交 → 我的订单（待面交）；待评价 → 我的订单（已完成） |
+| 最新商品 | `GET /api/goods/list?page=1&size=6` | 商品详情；底部「查看全部 →」→ 集市页 |
+
+### `GET /api/orders/summary`（需登录）
+
+只返回**当前登录用户自己**的订单计数，响应 `data`：
+
+```json
+{"pendingSellerConfirm": 0, "waitMeet": 0, "toReview": 0}
+```
+
+| 字段 | 口径 |
+| :--- | :--- |
+| `pendingSellerConfirm` | `seller_id = 我` 且 `order_status = 'WAIT_SELLER_CONFIRM'`（买家视角不计入——该状态下买家没有可做的动作） |
+| `waitMeet` | `(buyer_id = 我 OR seller_id = 我)` 且 `order_status = 'WAIT_MEET'`（双方都要到场面交，因此买卖两侧都计入） |
+| `toReview` | 我参与、`order_status = 'COMPLETED'`、且**不存在** `reviewer_id = 我` 的评价记录（只看我自己评没评，与对方评没评无关） |
+
+实现：`TradeOrderMapper.selectTodoSummary` 用一条 PostgreSQL 聚合 SQL
+（`count(*) FILTER (WHERE ...)` + 相关子查询 `NOT EXISTS`）一次算出三列，
+避免"逐单查评价状态"的 N+1；`WHERE buyer_id = 我 OR seller_id = 我` 让数据隔离由 SQL 保证，
+而不是靠调用方记得传对参数。三个计数用 `Integer` 下发（是"条数"不是 ID，不受全局
+Long→String 序列化影响，前端拿到的是 JSON 数字）。无订单的用户仍得到一行全 0。
+
+`frontend/lib/models/order_summary.dart` 与 `frontend/lib/controllers/home_controller.dart`
+是该接口的前端落点：首页控制器只做"待办汇总 + 最新商品"两件事，**不复用**集市页的
+`GoodsController` 或订单页的 `OrderController`（复用会把首页请求混进它们的分页/筛选状态机）。
 
 ---
 
@@ -518,6 +558,9 @@ cd frontend && flutter build web --dart-define=API_BASE_URL=https://app.example.
 - [x] 工程化收尾（批次 3）：门禁 Docker 前置检查、CI 与本地门禁对齐、镜像 tag 固定、CHANGELOG/CONTRIBUTING、stage7/8 报告
 - [x] 代码整洁收尾（本批次）：JWT 令牌 userId 与数据库用户比对、认证测试用例自治、`StudentVerifyStatus` 枚举化、
       测试裸状态字面量收敛、前端 `_serverMessage` 统一与 pageSize/版本号收敛、HTML 展示端守护测试
-- [x] 测试基线：后端 `mvn -B test` **257 项**、`flutter analyze` 0 issue、`flutter test` **187 项**（全绿）
+- [x] 测试基线：后端 `mvn -B test` **263 项**、`flutter analyze` 0 issue、`flutter test` **194 项**（全绿）
+- [x] 首页重做为"面向用户"的可用首页（本批次）：删除两张开发进度说明卡（`Active`/`Ready`/技术名词清零），
+      改为 搜索框 + 我的待办（新增 `GET /api/orders/summary` 一条 SQL 算三项计数）+ 最新商品，
+      整页下拉刷新；新增 `HomeController`（页面级实例，不与集市/订单页共用）、首页与集市/订单的初始参数支持
 
 > 各阶段的提交、验证结论与测试项数变化见 [CHANGELOG.md](CHANGELOG.md)。

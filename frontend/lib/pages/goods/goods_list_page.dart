@@ -32,6 +32,21 @@ class _GoodsListPageState extends State<GoodsListPage> {
       () => GoodsController(),
     );
     _scrollController.addListener(_onScroll);
+
+    // 支持"带初始关键词进入"（首页搜索框 → 集市页）。
+    //
+    // 只接受非空字符串：其它形态的参数（例如商品 ID、Map）一律忽略，
+    // 无参数进入时行为与以前完全一致。
+    //
+    // 为什么可以直接 onSearch：它内部走的是同一套"自增序号 + 取消在途请求"的列表状态机，
+    // 由 binding 的 lazyPut 触发的首次加载会被这次搜索取消（旧响应整份丢弃），
+    // 因此不会出现"先加载全部、再叠一次搜索结果"的错乱。
+    final Object? args = Get.arguments;
+    if (args is String && args.trim().isNotEmpty) {
+      final String keyword = args.trim();
+      _searchEditCtrl.text = keyword;
+      _controller.onSearch(keyword);
+    }
   }
 
   void _onScroll() {

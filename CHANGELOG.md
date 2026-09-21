@@ -9,6 +9,78 @@
 
 ---
 
+## 2026-09-21 — 首页从「开发进度说明页」改为「面向用户的可用首页」（工作区未提交）
+
+**为什么改**：首页此前是 Stage 0/1 遗留的"开发进度说明页"——两张静态卡片写着
+「用户中心与校园认证就绪 / Active」「商品发布与浏览体系就绪 / Ready」，内容是实现细节名词
+（Spring Security、JWT、MinIO、Redis INCR、二级树形分类…）。这些信息对用户没有任何意义：
+用户打开首页想做的事只有三件——找东西、看待办、看新上架的；而实现细节会随批次过期。
+本次按"面向用户"重做首页，技术术语与 `Active`/`Ready`/`就绪` 字样在用户可见文案里清零。
+
+**首页最终结构**（`frontend/lib/pages/home/home_page.dart`，自上而下）
+
+| 区块 | 内容 | 数据来源 |
+| :--- | :--- | :--- |
+| AppBar | 标题 + 个人中心/登录入口（沿用原逻辑） | — |
+| 欢迎条 | 已登录：头像首字 + `欢迎回来，X！` + `已通过 X 校园认证 · 信用分 N` + 「进入个人中心」；未登录：登录/注册引导 | `AuthController` |
+| 搜索框 | 未登录可用；回车或点搜索图标 → 集市页并带上关键词 | 路由参数 → `GoodsListPage` |
+| 我的待办 | 待我确认 / 待面交 / 待评价，各带数量（0 也显示、入口不隐藏）；点击 → 我的订单（卖家+待确认 / 待面交 / 已完成） | **新增 `GET /api/orders/summary`** |
+| 最新商品 | 最新 6 个在售商品（缩略图 + 标题 + 价格）+ 底部「查看全部 →」 | `GET /api/goods/list?page=1&size=6` |
+
+整页 `RefreshIndicator` 下拉刷新会**同时**刷新待办与最新商品；待办加载失败显示
+"待办加载失败，点击重试"（不静默隐藏、不阻塞其它区块），最新商品失败显示错误态 + 重试。
+
+**新增后端接口**：`GET /api/orders/summary`（需登录，只返回当前用户自己的数据）
+
+```sql
+SELECT
+    count(*) FILTER (WHERE o.seller_id = #{userId} AND o.order_status = 'WAIT_SELLER_CONFIRM') AS pending_seller_confirm,
+    count(*) FILTER (WHERE o.order_status = 'WAIT_MEET')                                      AS wait_meet,
+    count(*) FILTER (WHERE o.order_status = 'COMPLETED' AND NOT EXISTS (
+        SELECT 1 FROM campus_trade.review r WHERE r.order_id = o.id AND r.reviewer_id = #{userId})) AS to_review
+FROM campus_trade.trade_order o
+WHERE o.buyer_id = #{userId} OR o.seller_id = #{userId}
+```
+
+为什么要新增：`待确认 / 待面交` 可以由订单状态数出来，**`待评价` 不能**——订单是 COMPLETED
+只说明交易结束，是否需要"我"评价取决于 `review` 表里有没有 `reviewer_id = 我` 的记录；
+让前端逐单去查会退化成 N+1。因此由后端一条聚合 SQL（`count(*) FILTER` + 相关子查询 `NOT EXISTS`）
+一次算出三列，`WHERE` 把数据集收敛到"与我有关"，数据隔离由 SQL 保证。
+三个计数用 `Integer` 下发（是"条数"不是 ID，不受全局 Long→String 序列化影响）。
+
+**前端落点**：`lib/models/order_summary.dart`、`lib/api/order_api.dart#getTodoSummary`、
+`lib/controllers/home_controller.dart`（首页专属控制器，含 `todoLoading/todoErrorMessage/重试` 与
+`latestLoading/latestErrorMessage/重试`，请求序号 + CancelToken 丢弃迟到响应）、
+`lib/widgets/home_welcome_banner.dart` / `home_search_field.dart` / `home_todo_section.dart` /
+`home_latest_goods_section.dart`；首页路由配 `Get.lazyPut<HomeController>(fenix: false)` binding。
+
+**顺带的必要改动**
+
+- 集市页支持"带初始关键词进入"：`GoodsListPage.initState` 读取 `Get.arguments`（仅接受非空字符串，
+  无参数进入时行为与以前完全一致），复用 `GoodsController.onSearch` 走原有状态机（首次加载被取消）；
+- 我的订单页支持"带初始视角/状态进入"：`MyOrdersPage.open(role:, status:)` 统一发起跳转，
+  页面在 `initState` 应用参数（缺省时行为不变），仍使用 `OrderController.tagMyOrders` 实例；
+- 删除 `lib/widgets/status_badge.dart`：它只被首页的说明卡引用，首页重做后不再有任何页面使用它
+  （避免死代码）。
+
+**验证（实际跑过的结果）**
+
+- 后端 `mvn -B test`：**263 项全绿**（原 257 + 新增 6 项 `CampusTradeOrderSummaryTests`）；
+- `flutter analyze`：**0 issue**；`flutter test`：**194 项全绿**（原 187 + 新增 7 项 `test/home_page_widget_test.dart`；
+  另更新了 `widget_test.dart` 与 `stage8_missing_pages_widget_test.dart` 中针对旧说明卡的断言）；
+- `curl` 实测 `GET http://127.0.0.1:8081/api/orders/summary`：带 token 返回三项计数、
+  未登录返回 401、两个账号交叉验证互不可见对方订单；
+- 构建产物核对：`flutter build web` 产物中 `Active` / `Ready` / `Spring Security` / `MinIO` / `Redis INCR`
+  均不再出现在首页文案里，同时存在搜索框与待办区块文案。
+
+**测试注入的教训（保留备查）**：新测试类最初用 `/auth/register` + `/auth/login` 造账号，
+把注册接口"单 IP 每小时 20 次"的额度打满（整个测试 JVM 共用一个 Redis），
+导致 `CampusTradeStage7DTests.test04` 返回 429 而失败。改为直接建库内用户 +
+`JwtTokenProvider` 签发令牌后不再消耗限流额度——这也说明"共享 Redis 的限流额度"
+是测试之间的一条隐式耦合，新增测试时要留意。
+
+---
+
 ## 2026-09-21 — 后端端口改到 8081，并收敛为「只在一处配置」（工作区未提交）
 
 **为什么换端口**：本机 8080 已被同机的另一个项目长期占用（图书管理系统，`com.library.Application`）。
@@ -466,6 +538,7 @@ V12 在 Testcontainers 全新库与开发库均 `success`（Flyway 已登记 `ve
 | 批次 2 | `d740cb7` | 255 | 176 |
 | 批次 3（工程化与文档收尾） | `5544d5f` | 255 | 176 |
 | 代码整洁、测试收敛与小加固 | 本批次 | 257 | 187 |
+| 首页重做为用户可用首页（搜索 + 待办 + 最新商品） | 本批次 | 263 | 194 |
 
 > 表格中的 `—` 表示该阶段提交未单独给出该侧计数（不代表测试未运行）。
-> 每一行都要求 `flutter analyze` = 0 issue；当前基线为**后端 257 项、前端 187 项全绿**。
+> 每一行都要求 `flutter analyze` = 0 issue；当前基线为**后端 263 项、前端 194 项全绿**。

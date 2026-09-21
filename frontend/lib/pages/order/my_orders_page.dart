@@ -8,8 +8,34 @@ import '../../widgets/goods_thumbnail.dart';
 
 /// 订单列表浏览页面 (我的购买 / 我的出售)
 /// 提供视角切换、状态筛选、分页浏览与详情跳转功能
+///
+/// 支持带着**初始视角与状态**进入（首页"我的待办"的三个入口就是这么跳的）：
+/// 参数通过路由 arguments 传入，在 `initState` 里应用到本页专属的控制器实例上；
+/// 不带参数进入时行为与以前完全一致（默认买家视角、全部状态）。
 class MyOrdersPage extends StatefulWidget {
   const MyOrdersPage({super.key});
+
+  /// 路由参数字典的键
+  static const String argRole = 'role';
+  static const String argStatus = 'status';
+
+  /// 视角字面量（与后端 `/orders/my` 的 role 参数取值一致）
+  static const String roleBuyer = 'BUYER';
+  static const String roleSeller = 'SELLER';
+
+  /// 跳到"我的订单"并可指定初始视角 / 状态筛选。
+  ///
+  /// 统一从这里发起跳转（而不是让各页面自己拼 arguments），
+  /// 保证"参数名"与"如何解析"在同一处定义，改一处即可。
+  static void open({String? role, OrderStatus? status}) {
+    Get.toNamed(
+      AppRoutes.orderMy,
+      arguments: <String, dynamic>{
+        argRole: ?role,
+        argStatus: ?status,
+      },
+    );
+  }
 
   @override
   State<MyOrdersPage> createState() => _MyOrdersPageState();
@@ -31,6 +57,9 @@ class _MyOrdersPageState extends State<MyOrdersPage>
       () => OrderController(),
       tag: OrderController.tagMyOrders,
     );
+
+    // 先把路由参数应用到本页控制器，再决定标签页位置与首次请求的参数
+    _applyRouteArguments();
 
     final initialRole = _orderController.currentRole.value;
     final initialIndex = initialRole == 'SELLER' ? 1 : 0;
@@ -66,6 +95,37 @@ class _MyOrdersPageState extends State<MyOrdersPage>
     _scrollController.dispose();
     _orderControllerRef.release();
     super.dispose();
+  }
+
+  /// 应用路由参数里的初始视角 / 状态筛选。
+  ///
+  /// 只认识两种取值：
+  /// - role：`BUYER` / `SELLER`（大小写与空白不敏感）；
+  /// - status：[OrderStatus] 枚举本身，或其后端 code 字符串（如 `'WAIT_MEET'`）。
+  ///
+  /// 其余任何形态（缺省、类型不对、未知状态码）一律**忽略并保持页面默认行为**
+  /// （买家视角 + 全部状态），不会把页面卡在"筛不出任何订单"的状态上。
+  void _applyRouteArguments() {
+    final Object? args = Get.arguments;
+    if (args is! Map) return;
+
+    final Object? role = args[MyOrdersPage.argRole];
+    if (role is String) {
+      final String normalized = role.trim().toUpperCase();
+      if (normalized == MyOrdersPage.roleSeller || normalized == MyOrdersPage.roleBuyer) {
+        _orderController.currentRole.value = normalized;
+      }
+    }
+
+    final Object? status = args[MyOrdersPage.argStatus];
+    if (status is OrderStatus) {
+      _orderController.currentStatusFilter.value = status;
+    } else if (status is String && status.trim().isNotEmpty) {
+      final OrderStatus parsed = OrderStatus.fromCode(status);
+      if (parsed.isKnown) {
+        _orderController.currentStatusFilter.value = parsed;
+      }
+    }
   }
 
   @override

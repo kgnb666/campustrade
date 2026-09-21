@@ -2,6 +2,7 @@ import 'package:get/get.dart';
 import '../controllers/favorite_controller.dart';
 import '../controllers/goods_controller.dart';
 import '../controllers/history_controller.dart';
+import '../controllers/home_controller.dart';
 import '../controllers/order_controller.dart';
 import '../controllers/review_controller.dart';
 import '../pages/auth/login_page.dart';
@@ -21,7 +22,7 @@ import 'app_routes.dart';
 
 /// GetX 路由映射配置
 ///
-/// 关于 `binding`：页面级控制器（订单 / 商品 / 收藏 / 足迹 / 评价）都通过
+/// 关于 `binding`：页面级控制器（首页 / 订单 / 商品 / 收藏 / 足迹 / 评价）都通过
 /// `Get.lazyPut(..., fenix: false)`（非 permanent）在本路由的 binding 中注册，
 /// 因此实例与**路由同生命周期**——进入页面创建、离开页面由 GetX 释放。
 ///
@@ -37,11 +38,18 @@ class AppPages {
     GetPage(
       name: AppRoutes.initial,
       page: () => const HomePage(),
+      binding: BindingsBuilder(() {
+        // 首页专属实例：待办汇总 + 最新商品。随本路由释放（非 permanent）
+        Get.lazyPut<HomeController>(() => HomeController(), fenix: false);
+      }),
       transition: Transition.fadeIn,
     ),
     GetPage(
       name: AppRoutes.home,
       page: () => const HomePage(),
+      binding: BindingsBuilder(() {
+        Get.lazyPut<HomeController>(() => HomeController(), fenix: false);
+      }),
     ),
     GetPage(
       name: AppRoutes.login,

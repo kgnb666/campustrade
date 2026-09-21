@@ -15,6 +15,7 @@ import 'package:frontend/routes/app_pages.dart';
 import 'package:frontend/routes/app_routes.dart';
 import 'package:frontend/services/storage_service.dart';
 import 'package:frontend/widgets/goods_thumbnail.dart';
+import 'package:frontend/widgets/home_search_field.dart';
 import 'package:get/get.dart' hide Response;
 
 /// Stage 8-C6：此前没有 widget 测试的页面/组件的覆盖补齐。
@@ -136,7 +137,8 @@ void main() {
   // ==========================================================================
 
   group('Stage 8-C6: HomePage', () {
-    testWidgets('1. 未登录：展示登录/注册入口与登录引导卡片', (WidgetTester tester) async {
+    testWidgets('1. 未登录：展示登录/注册入口与登录引导条（且不显示待办区块）',
+        (WidgetTester tester) async {
       enlargeWindow(tester);
       Get.find<AuthController>()
         ..isLoggedIn.value = false
@@ -156,12 +158,24 @@ void main() {
       expect(find.widgetWithText(ElevatedButton, '登录'), findsOneWidget);
       // 登录态横幅不出现
       expect(find.textContaining('欢迎回来'), findsNothing);
+      // 未登录：搜索框与最新商品照常可用，"我的待办"整块不出现
+      expect(find.text(HomeSearchField.hintText), findsOneWidget);
+      expect(find.text('最新商品'), findsOneWidget);
+      expect(find.text('我的待办'), findsNothing);
     });
 
-    testWidgets('2. 已登录：欢迎语 + 关键交互（进入校园集市）', (WidgetTester tester) async {
+    testWidgets('2. 已登录：欢迎语 + 搜索框 + 查看全部进入校园集市',
+        (WidgetTester tester) async {
       enlargeWindow(tester);
 
       installMockApi((options) {
+        if (options.path.endsWith('/orders/summary')) {
+          return jsonOk(options, {
+            'pendingSellerConfirm': 0,
+            'waitMeet': 0,
+            'toReview': 0,
+          });
+        }
         if (options.path.endsWith('/goods/search/hot') ||
             options.path.endsWith('/goods/search/history')) {
           return jsonOk(options, <dynamic>[]);
@@ -182,7 +196,8 @@ void main() {
       expect(find.text('欢迎回来，买家测试！'), findsOneWidget);
       expect(find.textContaining('已通过 清华大学 校园认证'), findsOneWidget);
 
-      await tester.tap(find.text('进入校园集市'));
+      await tester.ensureVisible(find.text('查看全部 →'));
+      await tester.tap(find.text('查看全部 →'));
       await tester.pumpAndSettle();
       expect(find.byType(GoodsListPage), findsOneWidget);
       expect(find.text('校园二手电单车'), findsOneWidget);
