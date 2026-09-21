@@ -321,6 +321,15 @@ void main() {
 
       expect(find.text('该校园邮箱已被其他用户认证'), findsOneWidget,
           reason: '409 的业务提示必须原样展示给用户');
+
+      // safeSnackbar 的默认存活时长是 3 秒。此前它把 duration 透传为 null，
+      // 而 GetX 在 duration == null 时**根本不创建自动关闭定时器**，提示会永久留在屏幕上
+      // （用户实测："登录成功"一直挂在底部）。这里把时钟推过 3 秒，
+      // 既避免用例结束时"仍有 pending timer"而失败，也顺带守住"提示一定会自动消失"。
+      await tester.pump(const Duration(seconds: 4));
+      await tester.pumpAndSettle();
+      expect(find.text('该校园邮箱已被其他用户认证'), findsNothing,
+          reason: '提示必须在默认时长（3 秒）后自动关闭，不允许永久停留');
     });
   });
 }

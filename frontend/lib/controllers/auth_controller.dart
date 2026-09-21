@@ -80,12 +80,16 @@ class AuthController extends GetxController {
         }
 
         isLoggedIn.value = true;
-        safeSnackbar('登录成功', '欢迎回到 CampusTrade，${displayNameOf(currentUser.value?.nickname, username)}！',
-            snackPosition: SnackPosition.BOTTOM,
-            backgroundColor: Colors.green.withAlpha(40),
-            colorText: Colors.green[900]);
-
-        safeOffAllNamed(AppRoutes.home);
+        // 先跳转再提示：提示若弹在 offAllNamed 之前，其自动关闭定时器会随旧路由一起被销毁，
+        // 导致"登录成功"永久挂在 overlay 上不消失（实测缺陷）。
+        safeSnackbarAfterNavigation(
+          () => safeOffAllNamed(AppRoutes.home),
+          '登录成功',
+          '欢迎回到 CampusTrade，${displayNameOf(currentUser.value?.nickname, username)}！',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.green.withAlpha(40),
+          colorText: Colors.green[900],
+        );
         return true;
       } else {
         AppLogger.error('[AuthController] login 业务失败: ${response.data['message']}');
@@ -127,11 +131,17 @@ class AuthController extends GetxController {
       });
 
       if (response.data['code'] == 200) {
-        safeSnackbar('注册成功', '恭喜您注册成功，已为您自动创建初始 100 信用档案，请登录',
-            snackPosition: SnackPosition.BOTTOM,
-            backgroundColor: Colors.green.withAlpha(40),
-            colorText: Colors.green[900]);
-        safeOffNamed(AppRoutes.login);
+        // 同上：注册成功后要跳登录页，提示必须在跳转之后弹
+        // 该文案含三个分句（注册成功 / 信用档案 / 请登录），3 秒读不完，给到 5 秒
+        safeSnackbarAfterNavigation(
+          () => safeOffNamed(AppRoutes.login),
+          '注册成功',
+          '恭喜您注册成功，已为您自动创建初始 100 信用档案，请登录',
+          snackPosition: SnackPosition.BOTTOM,
+          duration: const Duration(seconds: 5),
+          backgroundColor: Colors.green.withAlpha(40),
+          colorText: Colors.green[900],
+        );
         return true;
       } else {
         AppLogger.error('[AuthController] register 业务失败: ${response.data['message']}');
@@ -180,9 +190,12 @@ class AuthController extends GetxController {
 
     try {
       if (Get.context != null) {
-        safeSnackbar('已安全退出', '您已安全退出当前账号',
-            snackPosition: SnackPosition.BOTTOM);
-        safeOffAllNamed(AppRoutes.home);
+        // 先跳转再提示（原因见 safeSnackbarAfterNavigation 的注释）
+        safeSnackbarAfterNavigation(
+          () => safeOffAllNamed(AppRoutes.home),
+          '已安全退出',
+          '您已安全退出当前账号',
+        );
       }
     } catch (e, stack) {
       AppLogger.warn('[AuthController] 登出后跳转失败', error: e, stackTrace: stack);
@@ -203,11 +216,15 @@ class AuthController extends GetxController {
 
     try {
       if (Get.context != null && Get.currentRoute != AppRoutes.LOGIN) {
-        safeSnackbar('登录已失效', '您的登录会话已过期，请重新登录',
-            snackPosition: SnackPosition.TOP,
-            backgroundColor: Colors.orange.withAlpha(40),
-            colorText: Colors.orange[900]);
-        safeOffAllNamed(AppRoutes.LOGIN);
+        // 先跳转再提示（原因见 safeSnackbarAfterNavigation 的注释）
+        safeSnackbarAfterNavigation(
+          () => safeOffAllNamed(AppRoutes.LOGIN),
+          '登录已失效',
+          '您的登录会话已过期，请重新登录',
+          snackPosition: SnackPosition.TOP,
+          backgroundColor: Colors.orange.withAlpha(40),
+          colorText: Colors.orange[900],
+        );
       }
     } catch (e, stack) {
       // 没有 Navigator（单元测试）时跳转会失败，但不能因此中断上面的凭据清理
@@ -347,11 +364,15 @@ class AuthController extends GetxController {
 
       if (response.data['code'] == 200) {
         await fetchProfile();
-        safeSnackbar('认证成功', '恭喜！您已成功通过校园学生身份认证',
-            snackPosition: SnackPosition.BOTTOM,
-            backgroundColor: Colors.green.withAlpha(40),
-            colorText: Colors.green[900]);
-        safeOffNamed(AppRoutes.profile);
+        // 先跳转再提示（原因见 safeSnackbarAfterNavigation 的注释）
+        safeSnackbarAfterNavigation(
+          () => safeOffNamed(AppRoutes.profile),
+          '认证成功',
+          '恭喜！您已成功通过校园学生身份认证',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: Colors.green.withAlpha(40),
+          colorText: Colors.green[900],
+        );
         return true;
       } else {
         AppLogger.error('[AuthController] verifyCode 业务失败: ${response.data['message']}');
