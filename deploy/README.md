@@ -1,0 +1,161 @@
+# CampusTrade 服务器部署（腾讯云）
+
+本目录是**服务器侧**的部署套件：把 `docker-compose.prod.yml` 的生产栈加上一个边缘
+Nginx，并用脚本生成生产变量文件。开发机上的 `start.ps1` / `docker-compose.yml`
+与这里无关，互不影响。
+
+---
+
+## 一、当前部署实例（2026-09-21）
+
+| 项目 | 值 |
+| --- | --- |
+| 服务器 | `129.204.61.68`（腾讯云 CVM，Ubuntu 24.04，4 核 / 3.6G / 59G） |
+| 登录 | `ubuntu`（免密 sudo），SSH 22 |
+| 代码目录 | `/opt/campustrade`（git 仓库，origin = GitHub，用服务器自己的 Deploy Key 拉取） |
+| 生产变量 | `/etc/campustrade/prod.env`（600 / root:root，含随机凭据） |
+| 前端产物 | `/opt/campustrade/web`（`flutter build web` 输出） |
+| 对外入口 | `http://129.204.61.68:8080`（**需先放通安全组 8080**，见第四节） |
+| 编排文件 | `docker-compose.prod.yml` + `deploy/docker-compose.edge.yml` |
+
+容器（compose project `campustrade-prod`，全部 `restart: unless-stopped`）：
+
+```
+                      公网 :8080
+                          │
+                ┌─────────▼──────────┐
+                │ campustrade-prod-  │  静态前端 / + /api/ 反代 + /img/ 反代
+                │ edge (nginx)       │
+                └───┬────────────┬───┘
+                    │ /api/      │ /img/
+        ┌───────────▼──┐   ┌─────▼────────┐
+        │ app (8081)   │   │ minio (9000) │   ← 三者只在
+        └──┬────────┬──┘   └──────┬───────┘     campustrade-prod-network 内可达
+           │        │             │
+   ┌───────▼──┐ ┌───▼─────┐ ┌─────▼──────┐
+   │ postgres │ │ redis   │ │ minio 数据 │
+   └──────────┘ └─────────┘ └────────────┘
+```
+
+> 同一台服务器上还跑着另一个项目（`campus-ledger-*`，占用宿主 80 端口）。
+> 本项目的中间件**不发布任何宿主端口**，只发布边缘 Nginx 的 8080，因此两者互不干扰。
+
+---
+
+## 二、首次部署（换新服务器时照做）
+
+```bash
+# 0. 前置：Docker Engine + Compose v2；放通安全组的 SSH 端口
+
+# 1. 取代码
+sudo mkdir -p /opt && sudo chown "$USER" /opt
+git clone git@github.com:kgnb666/campustrade.git /opt/campustrade
+
+# 2. 生成生产变量（随机口令 + 按实际地址生成 CORS/图片前缀）
+cd /opt/campustrade
+sudo bash deploy/init-prod-env.sh <公网IP或域名> 8080
+#    已有真实 SMTP 时用：
+#    sudo MAIL_HOST=smtp.exmail.qq.com MAIL_USER=noreply@x.com MAIL_PASS='授权码' \
+#         bash deploy/init-prod-env.sh <公网IP或域名> 8080
+
+# 3. 准备中间件与应用镜像
+sudo docker pull postgres:16.15
+sudo docker pull redis:7.4.11
+# MinIO：国内镜像源在 OCI referrers 接口上会超时，改用官方备用仓库 Quay
+sudo docker pull quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z
+sudo docker tag  quay.io/minio/minio:RELEASE.2024-10-13T13-34-11Z \
+                 minio/minio:RELEASE.2024-10-13T13-34-11Z
+sudo docker pull nginx:1.27-alpine
+# 应用镜像：建议在开发机构建好再传（服务器拉 Maven 依赖既慢又占空间）：
+#   开发机: docker build -t campustrade-backend:0.0.1 -f backend/Dockerfile backend
+#           docker save -o /tmp/ct.tar campustrade-backend:0.0.1
+#           scp /tmp/ct.tar <user>@<host>:~/
+#   服务器: sudo docker load -i ~/ct.tar
+
+# 4. 前端产物（开发机执行，地址必须与对外入口一致）
+#    flutter build web --release --dart-define=API_BASE_URL=http://<地址>:8080/api
+#    然后打包上传并解压到 /opt/campustrade/web（解压前不要删除该目录，见第五节）
+
+# 5. 启动
+sudo docker compose -f docker-compose.prod.yml -f deploy/docker-compose.edge.yml \
+     --env-file /etc/campustrade/prod.env up -d
+```
+
+---
+
+## 三、日常运维
+
+```bash
+cd /opt/campustrade
+export COMPOSE="sudo docker compose -f docker-compose.prod.yml -f deploy/docker-compose.edge.yml --env-file /etc/campustrade/prod.env"
+
+$COMPOSE ps                      # 容器状态与健康
+$COMPOSE logs -f app             # 后端日志（stdout）
+sudo docker logs campustrade-prod-app | tail -100          # 同上
+sudo tail -f /var/lib/docker/volumes/campustrade_prod_app_logs/_data/campustrade.log
+$COMPOSE restart edge            # 只重启边缘 Nginx
+$COMPOSE down                    # 停栈（不加 -v，数据卷保留）
+$COMPOSE up -d                   # 起栈
+```
+
+数据库临时操作（不开放端口，走容器内 psql）：
+
+```bash
+sudo docker exec -it campustrade-prod-postgres psql -U campustrade -d campustrade
+```
+
+---
+
+## 四、发布新版本
+
+```bash
+# 服务器
+cd /opt/campustrade
+git pull --ff-only
+sudo docker compose -f docker-compose.prod.yml -f deploy/docker-compose.edge.yml \
+     --env-file /etc/campustrade/prod.env up -d
+```
+
+- **只改前端**：重新 `flutter build web` 并覆盖 `/opt/campustrade/web` 内容
+  （解压到目录**内部**，不要先 `rm -rf` 目录本身，原因见第五节）。
+- **改了后端代码**：镜像 tag 要与 `backend/pom.xml` 版本号（去掉 `-SNAPSHOT`）一致，
+  在开发机重新构建并 `docker save/load`，然后改 `APP_IMAGE_TAG` 或直接
+  `APP_IMAGE_TAG=0.0.2 $COMPOSE up -d`。
+- 迁移由 Flyway 在应用启动时执行；`prod` 下 `baseline-on-migrate=false`，
+  一个"非空但没有 `flyway_schema_history`"的库会拒绝启动（这是刻意设计）。
+
+---
+
+## 五、已知坑（踩过的，别再踩）
+
+1. **不要把 bind mount 的目录整个删掉重建**：`edge` 容器把 `/opt/campustrade/web`
+   挂进容器，删除再 `mkdir` 会让容器继续指向被删掉的旧 inode，表现为首页 403、
+   静态资源 404。正确做法是把文件解压/覆盖到目录**内部**；万一已经删了，
+   `$COMPOSE up -d --force-recreate edge` 重建容器即可。
+2. **compose 相对路径以"第一个 `-f` 文件所在目录"为基准**：因此
+   `deploy/docker-compose.edge.yml` 里写的是 `./deploy/nginx/...`，
+   并且必须在仓库根目录执行 `docker compose`。
+3. **不要省掉 `--env-file`**：compose 默认读仓库根目录的 `.env`（开发口令），
+   `ProdSecretsGuard` 会因此拒绝启动（这是它的设计目的）。
+4. **MinIO 镜像别用国内镜像源拉**：`mirror.ccs.tencentyun.com` 在 OCI referrers
+   接口上会 `dial tcp ... i/o timeout`，用 Quay 源拉完再 `docker tag` 成 compose 里的名字。
+5. **SSH 传大文件会偶发中断**：传完务必校验（`ls` 数量 / `du -sh` / 直接 `curl` 一次），
+   本项目第一次传前端产物就断了一半，页面 403 的根因就在这。
+
+---
+
+## 六、上线待办
+
+- [ ] **安全组放通 8080**（腾讯云控制台 → 安全组/防火墙 → 入站规则 TCP 8080），
+      否则外网访问 `http://129.204.61.68:8080` 会一直超时（服务器内部正常）。
+- [ ] **替换真实 SMTP**：当前 `/etc/campustrade/prod.env` 里是占位发信账号，
+      服务能启动，但**校园认证验证码发不出去**。换成真实账号后
+      `$COMPOSE up -d --force-recreate app` 生效。
+- [ ] **HTTPS**：需要一个已解析的域名（大陆服务器还需 ICP 备案），
+      之后在本目录加 certbot 或走腾讯云 SSL 证书 + Nginx 443。
+- [ ] **数据库备份**：目前没有任何自动备份机制（数据卷 ≠ 备份）。建议每日
+      `pg_dump -Fc` 到异地/对象存储，并定期做恢复演练。
+- [ ] **Redis 明文 refresh token 清理**：本项目上线时的 Redis 是空的，无需清理；
+      若将来从旧环境迁移数据，按根 README「2.3」执行一次。
+- [ ] **SSD 参数**：已在生产库执行 `ALTER DATABASE campustrade SET random_page_cost = 1.1`
+      （对新建连接生效）。
