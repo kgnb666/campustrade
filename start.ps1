@@ -14,7 +14,10 @@
 #      并以非 0 退出，不做"打一行红字然后继续当成功"的处理；
 #   5. 工具链路径解析统一走 scripts\toolchain.ps1（环境变量 → PATH → 报错指引），
 #      本文件与其它脚本都不得再写死任何盘符；
-#   6. 本脚本只报告服务地址，绝不回显 .env 里的口令（MinIO / 数据库口令都只写"见 .env"）。
+#   6. 本脚本只报告服务地址，绝不回显 .env 里的口令（MinIO / 数据库口令都只写"见 .env"）；
+#   7. 后端端口只在项目根目录 .env 的 BACKEND_PORT 里配置一处（缺省 8081）。本文件、
+#      stop.ps1、backend/run-backend.cmd、backend/check-port.cmd 都不得再写死端口号：
+#      占用预检、占用者判定、等待循环、提示 URL、末尾导航一律读同一个配置值。
 # ==============================================================================
 param(
     # 直接指定启动模式编号（1/2/3/4/5/6/0），用于脚本化调用，跳过交互提问。
@@ -32,6 +35,40 @@ $qualityGate = Join-Path $rootDir "scripts\quality-gate.ps1"
 # 共享的工具链解析（含可选的 .env.tools 加载）
 . (Join-Path $rootDir "scripts\toolchain.ps1")
 $toolchainFile = Import-LocalToolchainEnv -RootDir $rootDir
+
+# ==============================================================================
+# 后端端口：唯一配置源是项目根目录 .env 的 BACKEND_PORT（缺失时回退 8081）。
+#
+# 本脚本里不得再出现端口字面量：占用预检、占用者归属判定、启动过程中被抢占的判定、
+# 等待循环、成功/失败提示里的 URL、末尾导航里的地址，全部取自 $script:backendPort。
+# 改端口只需改 .env 里的一行（本机 8080 被另一个项目占用，故默认 8081）。
+# ==============================================================================
+function Get-EnvValue {
+    <#
+      读取项目根目录 .env 里某个 KEY 的值；文件不存在或没有该键时返回默认值。
+      解析规则与 backend/run-backend.cmd、scripts/toolchain.ps1 保持一致：
+      跳过空行与 # 开头的注释，以第一个 '=' 切分，值去掉首尾空白。
+    #>
+    param([string]$Key, [string]$Default)
+
+    $envFile = Join-Path $rootDir ".env"
+    if (-not (Test-Path $envFile)) { return $Default }
+    foreach ($line in Get-Content -LiteralPath $envFile -Encoding UTF8) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq "" -or $trimmed.StartsWith("#")) { continue }
+        $index = $trimmed.IndexOf("=")
+        if ($index -lt 1) { continue }
+        if ($trimmed.Substring(0, $index).Trim() -eq $Key) { return $trimmed.Substring($index + 1).Trim() }
+    }
+    return $Default
+}
+
+# 只读一次并全程复用；非法值一律回退，避免把坏配置喂给 Get-NetTCPConnection 后静默失效
+$script:backendPort = Get-EnvValue -Key "BACKEND_PORT" -Default "8081"
+if ($script:backendPort -notmatch '^\d+$') {
+    Write-Host "[警告] .env 里的 BACKEND_PORT 不是合法端口号（$script:backendPort），已回退为 8081。" -ForegroundColor Yellow
+    $script:backendPort = "8081"
+}
 
 Write-Host "==============================================================================" -ForegroundColor Green
 Write-Host "          CampusTrade 校园二手交易平台 - 一键启动控制台" -ForegroundColor Green
@@ -96,12 +133,14 @@ function Start-DockerServices {
 }
 
 function Test-BackendPort {
-    return [bool](Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue)
+    param([int]$Port)
+    return [bool](Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
 }
 
 function Get-BackendPortOwner {
-    # 返回占用 8080 的进程对象；端口空闲时返回 $null
-    $conn = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+    param([int]$Port)
+    # 返回占用该端口的进程对象；端口空闲时返回 $null
+    $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
     if (-not $conn) { return $null }
     return Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue
 }
@@ -123,13 +162,13 @@ function Start-BackendService {
         return
     }
 
-    $owner = Get-BackendPortOwner
+    $owner = Get-BackendPortOwner -Port $script:backendPort
     if ($owner) {
         if ($owner.CommandLine -like "*com.campustrade.CampusTradeApplication*") {
-            Write-Host "[提示] 端口 8080 已由 CampusTrade 后端占用，无需重复启动。" -ForegroundColor Yellow
+            Write-Host "[提示] 端口 $script:backendPort 已由 CampusTrade 后端占用，无需重复启动。" -ForegroundColor Yellow
         } else {
             $appClass = if ($owner.CommandLine -match '([\w.]+Application)') { $Matches[1] } else { $owner.Name }
-            Write-Host "[警告] 端口 8080 已被其它程序占用，CampusTrade 后端无法启动。" -ForegroundColor Red
+            Write-Host "[警告] 端口 $script:backendPort 已被其它程序占用，CampusTrade 后端无法启动。" -ForegroundColor Red
             Write-Host "       占用进程: $appClass (PID $($owner.ProcessId))" -ForegroundColor Red
             Write-Host "       请先停止该程序后再启动本项目后端。" -ForegroundColor Red
             $script:backendOk = $false
@@ -142,15 +181,15 @@ function Start-BackendService {
     # 不要在本文件里拼接 "set JAVA_HOME=... &"：cmd 会把 & 前的空格并入变量值，
     # Maven 会因 JAVA_HOME 无效而直接退出。
     Start-Process -FilePath "cmd.exe" -WorkingDirectory $backendDir -ArgumentList "/k", "title CampusTrade Backend && run-backend.cmd"
-    Write-Host "[*] 等待本项目后端监听 8080 (最长 120 秒)..." -NoNewline
-    # 就绪判据必须是"8080 的持有者 = 本项目后端"，而不是"8080 有人监听"。
-    # 否则会出现这类假成功：检查时端口空闲 → 拉起后端 → 期间别的程序抢占了 8080
+    Write-Host "[*] 等待本项目后端监听 $script:backendPort (最长 120 秒)..." -NoNewline
+    # 就绪判据必须是"该端口的持有者 = 本项目后端"，而不是"该端口有人监听"。
+    # 否则会出现这类假成功：检查时端口空闲 → 拉起后端 → 期间别的程序抢占了该端口
     # → 轮询看到"有人监听"就报成功，而我们的后端其实早就因端口被占退出了（实测发生过）。
     $attempts = 0
     $ready = $false
     $hijackedBy = $null
     while ($attempts -lt 60) {
-        $currentOwner = Get-BackendPortOwner
+        $currentOwner = Get-BackendPortOwner -Port $script:backendPort
         if ($currentOwner) {
             if ($currentOwner.CommandLine -like "*com.campustrade.CampusTradeApplication*") {
                 $ready = $true
@@ -165,11 +204,11 @@ function Start-BackendService {
     }
 
     if ($ready) {
-        Write-Host "`n[成功] 后端服务已就绪！(http://127.0.0.1:8080/api)" -ForegroundColor Green
+        Write-Host "`n[成功] 后端服务已就绪！(http://127.0.0.1:$script:backendPort/api)" -ForegroundColor Green
     } elseif ($hijackedBy) {
         # 端口在启动过程中被别人抢走：明确报错，绝不报成功
         $appClass = if ($hijackedBy.CommandLine -match '([\w.]+Application)') { $Matches[1] } else { $hijackedBy.Name }
-        Write-Host "`n[错误] 端口 8080 在本项目后端启动过程中被其它程序占用，后端无法监听。" -ForegroundColor Red
+        Write-Host "`n[错误] 端口 $script:backendPort 在本项目后端启动过程中被其它程序占用，后端无法监听。" -ForegroundColor Red
         Write-Host "       占用进程: $appClass (PID $($hijackedBy.ProcessId))" -ForegroundColor Red
         Write-Host "       请停止该程序后重试，或为两个项目分配不同端口。" -ForegroundColor Red
         $script:backendOk = $false
@@ -293,30 +332,18 @@ if ($script:failed -or -not $script:backendOk) {
     exit 1
 }
 
-# 只回显端口（不涉及口令）；端口取自 .env，改过端口时导航也跟着变
-function Get-EnvPort {
-    param([string]$Key, [string]$Default)
-    $envFile = Join-Path $rootDir ".env"
-    if (-not (Test-Path $envFile)) { return $Default }
-    foreach ($line in Get-Content -LiteralPath $envFile -Encoding UTF8) {
-        $trimmed = $line.Trim()
-        if ($trimmed -eq "" -or $trimmed.StartsWith("#")) { continue }
-        $index = $trimmed.IndexOf("=")
-        if ($index -lt 1) { continue }
-        if ($trimmed.Substring(0, $index).Trim() -eq $Key) { return $trimmed.Substring($index + 1).Trim() }
-    }
-    return $Default
-}
-
-$pgPort = Get-EnvPort -Key "POSTGRES_PORT" -Default "15435"
-$redisPort = Get-EnvPort -Key "REDIS_PORT" -Default "6379"
-$minioConsolePort = Get-EnvPort -Key "MINIO_CONSOLE_PORT" -Default "9001"
+# 只回显端口（不涉及口令）；端口取自 .env（读取函数 Get-EnvValue 定义在文件开头），
+# 改过端口时导航也跟着变。后端端口额外取一次兜底：脚本早期若已解析成非数字会回退 8081。
+$pgPort = Get-EnvValue -Key "POSTGRES_PORT" -Default "15435"
+$redisPort = Get-EnvValue -Key "REDIS_PORT" -Default "6379"
+$minioConsolePort = Get-EnvValue -Key "MINIO_CONSOLE_PORT" -Default "9001"
+$backendPort = $script:backendPort
 
 Write-Host "`n==============================================================================" -ForegroundColor Green
 Write-Host "                      CampusTrade 启动完成导航" -ForegroundColor Green
 Write-Host "==============================================================================" -ForegroundColor Green
 Write-Host "  * 前端应用 Web 端   : 稍后将在 Chrome 浏览器中自动展示" -ForegroundColor White
-Write-Host "  * 后端 API 接口     : http://127.0.0.1:8080/api" -ForegroundColor White
+Write-Host "  * 后端 API 接口     : http://127.0.0.1:$backendPort/api" -ForegroundColor White
 Write-Host "  * 接口文档          : 暂无在线文档页（未引入 springdoc/swagger-ui）" -ForegroundColor White
 Write-Host "  * MinIO 管理控制台  : http://127.0.0.1:$minioConsolePort (账号与口令见项目根目录 .env，本脚本不回显)" -ForegroundColor White
 Write-Host "  * PostgreSQL 16     : 127.0.0.1:$pgPort (库名 campustrade，口令见 .env)" -ForegroundColor White

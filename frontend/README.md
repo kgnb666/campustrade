@@ -24,12 +24,13 @@ run-frontend.cmd run -d chrome
 
 ### API 基址怎么注入
 
-`lib/config/app_config.dart` 中的基址是**编译期常量**，默认 `http://127.0.0.1:8080/api`：
+`lib/config/app_config.dart` 中的基址是**编译期常量**，默认 `http://127.0.0.1:8081/api`
+（与项目根目录 `.env` 的 `BACKEND_PORT=8081` 一致；8080 被同机另一个项目占用）：
 
 ```dart
 static const String apiBaseUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'http://127.0.0.1:8080/api',
+  defaultValue: 'http://127.0.0.1:8081/api',
 );
 ```
 
@@ -38,7 +39,7 @@ static const String apiBaseUrl = String.fromEnvironment(
 
 ```bash
 # 调试：指向同一局域网里的后端
-flutter run -d chrome --dart-define=API_BASE_URL=http://10.0.0.5:8080/api
+flutter run -d chrome --dart-define=API_BASE_URL=http://10.0.0.5:8081/api
 
 # 生产构建：指向线上 API
 flutter build web --dart-define=API_BASE_URL=https://app.example.com/api
@@ -108,7 +109,7 @@ server {
 
     # 若前端与后端同域，可以在这里反代 API（此时 API_BASE_URL 用同域地址）
     # location /api/ {
-    #     proxy_pass http://127.0.0.1:8080/api/;
+    #     proxy_pass http://127.0.0.1:8081/api/;
     #     proxy_set_header Host $host;
     #     proxy_set_header X-Real-IP $remote_addr;
     #     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

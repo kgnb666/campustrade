@@ -13,6 +13,11 @@
 #      （prod profile 由 ProdSecretsGuard 做启动期 fail-fast 校验，缺失即拒绝启动）；
 #   4. 健康检查：探活使用公开接口 GET /api/school/list（无需认证），
 #      与 docker-compose.prod.yml 的 healthcheck / depends_on 配合；
+#   4b. 端口 8081（容器内与宿主机一致，避免"容器内 8080 / 宿主机 8081"两套心智模型）：
+#      本机开发端口由项目根目录 .env 的 BACKEND_PORT 统一配置；生产由
+#      docker-compose.prod.yml 注入 SERVER_PORT（本文件的 ENV 也给了同一个默认值），
+#      Spring Boot 侧读的是 application.yml 的 server.port: ${SERVER_PORT:8081}。
+#      EXPOSE 与下面的 HEALTHCHECK 探针必须与被注入的端口保持一致。
 #   5. 不使用 `latest`：基础镜像固定到具体版本号（补丁级固定），升级必须显式改本文件。
 #      运行阶段镜像固定为 `eclipse-temurin:21.0.12_8-jre-alpine-3.24`（此前是浮动的
 #      `21-jre-alpine`）：
@@ -73,15 +78,17 @@ RUN mkdir -p /app/logs && chown -R campustrade:campustrade /app
 
 USER campustrade
 
-EXPOSE 8080
+EXPOSE 8081
 
 ENV TZ=Asia/Shanghai \
     LOG_DIR=/app/logs \
+    SERVER_PORT=8081 \
     JAVA_OPTS="-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
 
 # 说明：这里刻意不设置 SPRING_PROFILES_ACTIVE —— profile 属于部署环境的运行期决策
 # （docker-compose.prod.yml 会注入 prod），镜像本身保持可复用。
+# SERVER_PORT 给出与 EXPOSE / 探针一致的默认值：直接 docker run 本镜像也能探活成功。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
-    CMD wget -q -O /dev/null http://127.0.0.1:8080/api/school/list || exit 1
+    CMD wget -q -O /dev/null http://127.0.0.1:8081/api/school/list || exit 1
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]

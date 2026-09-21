@@ -17,9 +17,13 @@ class AppConfig {
   static const String appVersion = '1.0.0+1';
 
   /// API 基础请求路径 (可通过 dart-define 动态指定)
+  ///
+  /// 端口与后端同源：项目根目录 .env 的 `BACKEND_PORT`（本机为 8081，因为 8080 被同机
+  /// 另一个项目占用）。`.env` 只在本地开发时用来记忆这个值——Flutter 构建不会读它，
+  /// 所以改端口时这里要一起改（或直接用 `--dart-define=API_BASE_URL=...` 覆盖）。
   static const String apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://127.0.0.1:8080/api',
+    defaultValue: 'http://127.0.0.1:8081/api',
   );
 
   /// 网络连接超时时间 (毫秒)

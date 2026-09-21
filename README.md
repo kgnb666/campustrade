@@ -52,12 +52,12 @@
 
 > 启动器将自动：
 > 1. 检查并拉起 Docker（PostgreSQL 16、Redis 7、MinIO）；
-> 2. 检查并启动后端 Spring Boot 3 服务（端口 8080）：启动前先判断 8080 占用情况，
->    能区分「本项目后端」与「其它程序占用」，后者会报出占用者主类与所属工程目录并中止，
->    既不会重复启动也不会误杀别的工程；
+> 2. 检查并启动后端 Spring Boot 3 服务（端口取自 `.env` 的 `BACKEND_PORT`，当前 **8081**）：
+>    启动前先判断该端口占用情况，能区分「本项目后端」与「其它程序占用」，后者会报出占用者主类
+>    与所属工程目录并中止，既不会重复启动也不会误杀别的工程；
 > 3. 打开 Chrome 浏览器启动 Flutter Web 前端应用；后端未就绪时会直接中止，不会继续拉起前端；
 > 4. 如需关闭所有服务，可双击运行 `stop.bat` 或 `stop.ps1`
->    （若 8080 被非本项目进程占用，停止脚本会先询问，默认不动它）。
+>    （若该端口被非本项目进程占用，停止脚本会先询问，默认不动它）。
 >
 > 启动器**不会**在控制台回显任何口令（MinIO / 数据库 / Redis 口令一律提示"见 .env"）。
 
@@ -71,7 +71,7 @@
 | `scripts/quality-gate.ps1` | 质量门禁唯一入口（后端测试 + 前端分析 + 前端测试），`start.ps1 -Mode 6` 直接调用它 | UTF-8 **带 BOM** |
 | `backend/run-backend.cmd` | 加载 `.env` 并启动 Spring Boot，失败时给出明确提示 | **必须纯 ASCII** |
 | `backend/resolve-toolchain.cmd` | 解析 JDK 21 / Maven；可单独运行用于诊断本机工具链 | **必须纯 ASCII** |
-| `backend/check-port.cmd` | 诊断 8080 占用者（空闲 / 本项目 / 其它程序） | **必须纯 ASCII** |
+| `backend/check-port.cmd` | 诊断后端端口占用者（空闲 / 本项目 / 其它程序）；端口缺省取 `.env` 的 `BACKEND_PORT`，也可作为第一个参数传入 | **必须纯 ASCII** |
 | `frontend/run-frontend.cmd` | 解析 Flutter 并执行 flutter 命令 | **必须纯 ASCII** |
 
 > **为什么中文不能写进 `.bat` / `.cmd`**：cmd.exe 按控制台代码页（本机为 GBK/936）解析批处理文件，
@@ -166,11 +166,11 @@ flutter pub get
 flutter analyze
 flutter run -d chrome
 ```
-> Web 端 API 基址默认 `http://127.0.0.1:8080/api`（`lib/config/app_config.dart`），
-> 需要指向别的后端时用编译期变量覆盖（`.env` 里的 `API_BASE_URL` 只是文档化的默认值，
-> **不会**参与 Flutter 构建）：
+> Web 端 API 基址默认 `http://127.0.0.1:8081/api`（`lib/config/app_config.dart`，端口与
+> `.env` 的 `BACKEND_PORT` 保持一致），需要指向别的后端时用编译期变量覆盖
+> （`.env` 里的 `API_BASE_URL` 只是文档化的默认值，**不会**参与 Flutter 构建）：
 > ```bash
-> flutter run   -d chrome --dart-define=API_BASE_URL=http://10.0.0.5:8080/api
+> flutter run   -d chrome --dart-define=API_BASE_URL=http://10.0.0.5:8081/api
 > flutter build web        --dart-define=API_BASE_URL=https://api.example.com/api
 > ```
 
@@ -182,21 +182,40 @@ flutter run -d chrome
 
 | 服务 | 地址 | 说明 |
 | :--- | :--- | :--- |
-| 后端 HTTP API | `http://127.0.0.1:8080/api` | 上下文路径固定为 `/api` |
+| 后端 HTTP API | `http://127.0.0.1:8081/api` | 上下文路径固定为 `/api`；端口由 `.env` 的 `BACKEND_PORT` 决定（8080 被同机另一个项目占用，故用 8081） |
 | PostgreSQL 16 | `127.0.0.1:15435` | 库名 `campustrade`，schema `campus_trade`（宿主 5432 常被本机服务占用，故用 15435） |
 | Redis 7 | `127.0.0.1:6379` | 需口令（`REDIS_PASSWORD`） |
 | MinIO S3 API | `127.0.0.1:9000` | 桶名 `campustrade` |
 | MinIO 控制台 | `http://127.0.0.1:9001` | 账号/口令见 `.env`（`MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`） |
 | Flutter Web 调试 | `flutter run -d chrome` 自动分配的端口 | 由 Flutter 决定，非固定值 |
 
-> 说明：上表端口取自 `.env`（`POSTGRES_PORT` / `REDIS_PORT` / `MINIO_PORT` / `MINIO_CONSOLE_PORT`），
+> 说明：中间件端口取自 `.env`（`POSTGRES_PORT` / `REDIS_PORT` / `MINIO_PORT` / `MINIO_CONSOLE_PORT`），
 > 改过端口后请同步修改 `SPRING_DATASOURCE_PORT` / `SPRING_DATA_REDIS_PORT` / `MINIO_ENDPOINT` / `MINIO_URL_PREFIX`。
-> 后端自身的 8080 由 `server.port` 决定（`SERVER_PORT` 可覆盖）。
+
+### 后端端口只在一处配置（改端口必读）
+
+后端端口只有一个配置点：**项目根目录 `.env` 的 `BACKEND_PORT`**（模板见 `.env.example`，当前 8081）。
+其余位置全部由它派生，不需要（也不允许）再写死端口号：
+
+| 读取方 | 怎么读到端口 |
+| :--- | :--- |
+| `backend/run-backend.cmd` | 解析 `.env` 后导出为环境变量 `SERVER_PORT`（Spring Boot 绑定 `server.port` 的约定名） |
+| `backend/src/main/resources/application.yml` | `server.port: ${SERVER_PORT:8081}`（读不到时回退 8081） |
+| `start.ps1` | 读 `.env` 的 `BACKEND_PORT`，用于占用预检 / 占用者归属判定 / 等待循环 / 提示 URL / 末尾导航 |
+| `stop.ps1` | 读同一个键，用于"停止哪个端口的后端进程" |
+| `backend/check-port.cmd` | 缺省读同一个键（也可用第一个参数显式覆盖，便于诊断任意端口） |
+| `frontend/lib/config/app_config.dart` | 编译期常量默认 `http://127.0.0.1:8081/api`（与 `BACKEND_PORT` 同号，可用 `--dart-define` 覆盖） |
+
+> **再改端口时**：只改 `.env` 的 `BACKEND_PORT`（并顺手把 `API_BASE_URL` 与
+> `lib/config/app_config.dart` 的默认值改成同号），脚本、后端与文档中的示例 URL 会跟着变。
+> 生产编排（`docker-compose.prod.yml` / `backend/Dockerfile`）是独立部署物，
+> 容器内外统一为 8081，端口写在该文件与 Dockerfile 里。
 
 ### 环境变量（`.env`，模板见 `.env.example`）
 
 | 变量 | 用途 | 是否必填 |
 | :--- | :--- | :--- |
+| `BACKEND_PORT` | **后端 HTTP 端口（唯一配置点）**；`run-backend.cmd` 会把它导出为 `SERVER_PORT` 供 Spring Boot 读取，启动/停止脚本与前端默认基址也以它为准 | 必填 |
 | `POSTGRES_PORT` / `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | 容器内 PostgreSQL 初始化 | 必填 |
 | `SPRING_DATASOURCE_HOST` / `_PORT` / `_DATABASE` / `_USERNAME` / `_PASSWORD` / `_SCHEMA` | 后端数据源（`_PORT` 必须与 `POSTGRES_PORT` 一致） | 必填 |
 | `REDIS_PORT` / `REDIS_PASSWORD` | 容器内 Redis 端口与口令 | 必填 |
@@ -337,6 +356,9 @@ export MAIL_HOST='smtp.example.com' MAIL_PORT=465 MAIL_USERNAME='noreply@example
 docker compose -f docker-compose.prod.yml --env-file /etc/campustrade/prod.env up -d
 ```
 - 生产编排里 postgres / redis / minio **不发布任何端口**，只在内部网络可达；
+- 应用端口：容器内监听与宿主发布**都是 8081**（`SERVER_PORT: "8081"` / `EXPOSE 8081` /
+  容器内 `HEALTHCHECK` 探针 `http://127.0.0.1:8081/api/school/list`），与本地开发端口同号；
+  需要改宿主发布端口时用 `APP_PORT`（例如 `APP_PORT=8090`，容器内仍是 8081）；
 - `depends_on: condition: service_healthy` 保证中间件健康后才启动应用；
 - 应用以 `SPRING_PROFILES_ACTIVE=prod` 运行，容器内为非 root（uid 10001）、根文件系统只读、仅 `/tmp` 与日志卷可写；
 - 缺任何敏感项都会**拒绝启动**（`ProdSecretsGuard` / `VerifyMailProdGuard` / `JwtTokenProvider` 三处 fail-fast）。

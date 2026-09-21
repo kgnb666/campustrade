@@ -17,7 +17,7 @@ import 'package:integration_test/integration_test.dart';
 ///
 /// 运行前提
 /// --------
-/// 1. 后端已启动且 [AppConfig.apiBaseUrl] 指向它（默认 http://127.0.0.1:8080/api）；
+/// 1. 后端已启动且 [AppConfig.apiBaseUrl] 指向它（默认 http://127.0.0.1:8081/api）；
 /// 2. 本机有可用设备：
 ///    - Windows 桌面（需要 Visual Studio C++ 工具链 **且** 已开启"开发者模式"，
 ///      否则 Flutter 无法为插件创建 symlink，构建会直接失败）：

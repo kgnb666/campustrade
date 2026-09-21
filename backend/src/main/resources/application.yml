@@ -1,5 +1,11 @@
 server:
-  port: 8080
+  # 端口只有一处配置：项目根目录 .env 的 BACKEND_PORT。
+  # 本机 8080 被另一个项目（图书管理系统）占用，故默认 8081。
+  # 读取链路：.env(BACKEND_PORT) → backend/run-backend.cmd 导出为环境变量 SERVER_PORT
+  # → 这里的 ${SERVER_PORT:8081}。启动器 start.ps1 / 停止脚本 stop.ps1 / 前端默认基址
+  # 同样只读 .env 的 BACKEND_PORT，不要在任何地方再写死端口。
+  # 生产：docker-compose.prod.yml 直接注入 SERVER_PORT=8081（容器内外一致）。
+  port: ${SERVER_PORT:8081}
   servlet:
     context-path: /api
 

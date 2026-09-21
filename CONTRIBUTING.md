@@ -38,7 +38,7 @@ FLUTTER_ROOT=D:\tools\flutter
 cp .env.example .env      # 按注释替换 CHANGE_ME_* 占位值（.env 已 git-ignore，绝不提交）
 docker compose up -d      # PostgreSQL 16 / Redis 7 / MinIO，均只绑 127.0.0.1
 cd backend  && mvn spring-boot:run     # 或双击 backend/run-backend.cmd（自动加载 .env）
-cd frontend && flutter run -d chrome   # API 基址默认 http://127.0.0.1:8080/api
+cd frontend && flutter run -d chrome   # API 基址默认 http://127.0.0.1:8081/api（= .env 的 BACKEND_PORT）
 ```
 
 Windows 上等价的一键方式：`.\start.bat`（完整启动）与 `.\stop.bat`（停止）。
@@ -125,8 +125,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\quality-gate.ps1 -On
   - 测试不得读写开发库或开发 Redis（走 Testcontainers）。
 - **前端**：`cd frontend && flutter analyze && flutter test`。
   - 修 bug 时优先补一个能复现的 widget / 单元测试（本项目"错误态与空态分离""昵称回退"等就是这么做回归的）；
-  - `integration_test/` 下的冒烟测试不被 `flutter test` 收集，需要 chromedriver 与可用的 8080 后端，
-    改动它时请在文件头写清运行前提。
+  - `integration_test/` 下的冒烟测试不被 `flutter test` 收集，需要 chromedriver 与可用的后端
+    （端口取 `.env` 的 `BACKEND_PORT`，当前 8081），改动它时请在文件头写清运行前提。
 - **新增依赖/工具后**：确认门禁命令没有变化（`CI 命令 = 本地门禁命令`），必要时同步更新
   `README.md`、`docs/README.md` 与 `CHANGELOG.md`。
 

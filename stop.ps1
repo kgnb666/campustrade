@@ -10,6 +10,29 @@ $rootDir = $PSScriptRoot
 . (Join-Path $rootDir "scripts\toolchain.ps1")
 Import-LocalToolchainEnv -RootDir $rootDir | Out-Null
 
+# ==============================================================================
+# 后端端口：与 start.ps1 共用同一个配置源——项目根目录 .env 的 BACKEND_PORT
+# （缺失时回退 8081）。这里不得再写死端口号，否则会出现"启动器在 8081 起、
+# 停止脚本去 8080 找"的半通状态。
+# ==============================================================================
+function Get-EnvValue {
+    param([string]$Key, [string]$Default)
+
+    $envFile = Join-Path $rootDir ".env"
+    if (-not (Test-Path $envFile)) { return $Default }
+    foreach ($line in Get-Content -LiteralPath $envFile -Encoding UTF8) {
+        $trimmed = $line.Trim()
+        if ($trimmed -eq "" -or $trimmed.StartsWith("#")) { continue }
+        $index = $trimmed.IndexOf("=")
+        if ($index -lt 1) { continue }
+        if ($trimmed.Substring(0, $index).Trim() -eq $Key) { return $trimmed.Substring($index + 1).Trim() }
+    }
+    return $Default
+}
+
+$backendPort = Get-EnvValue -Key "BACKEND_PORT" -Default "8081"
+if ($backendPort -notmatch '^\d+$') { $backendPort = "8081" }
+
 $script:failed = $false
 
 Write-Host "==============================================================================" -ForegroundColor Red
@@ -17,25 +40,26 @@ Write-Host "          CampusTrade 校园二手交易平台 - 一键停止控制�
 Write-Host "==============================================================================" -ForegroundColor Red
 Write-Host ""
 
-# 1. 查找并停止端口 8080 上的进程（区分是否为本项目后端，避免误杀其它工程的服务）
-Write-Host "[1/2] 正在检查并停止后端 Spring Boot 进程 (端口 8080)..." -ForegroundColor Cyan
-$conn = Get-NetTCPConnection -LocalPort 8080 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+# 1. 查找并停止后端端口上的进程（区分是否为本项目后端，避免误杀其它工程的服务）
+#    端口取自 .env 的 BACKEND_PORT（见文件开头），不再写死 8080/8081。
+Write-Host "[1/2] 正在检查并停止后端 Spring Boot 进程 (端口 $backendPort)..." -ForegroundColor Cyan
+$conn = Get-NetTCPConnection -LocalPort $backendPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
 $owner = if ($conn) { Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue } else { $null }
 
 if (-not $owner) {
-    Write-Host "[提示] 端口 8080 无占用，后端未运行。" -ForegroundColor Yellow
+    Write-Host "[提示] 端口 $backendPort 无占用，后端未运行。" -ForegroundColor Yellow
 } elseif ($owner.CommandLine -like "*com.campustrade.CampusTradeApplication*") {
     Write-Host "终止 CampusTrade 后端进程 (PID $($owner.ProcessId))..." -ForegroundColor Yellow
     Stop-Process -Id $owner.ProcessId -Force -ErrorAction SilentlyContinue
     Write-Host "[成功] 后端服务进程已终止。" -ForegroundColor Green
 } else {
     $appClass = if ($owner.CommandLine -match '([\w.]+Application)') { $Matches[1] } else { $owner.Name }
-    Write-Host "[警告] 端口 8080 被其它程序占用: $appClass (PID $($owner.ProcessId))" -ForegroundColor Red
+    Write-Host "[警告] 端口 $backendPort 被其它程序占用: $appClass (PID $($owner.ProcessId))" -ForegroundColor Red
     Write-Host "       它不是 CampusTrade 的后端，默认不结束它。" -ForegroundColor Red
-    $answer = Read-Host "       仍要结束该进程并释放 8080 吗? (y/N)"
+    $answer = Read-Host "       仍要结束该进程并释放 $backendPort 吗? (y/N)"
     if ($answer -eq 'y' -or $answer -eq 'Y') {
         Stop-Process -Id $owner.ProcessId -Force -ErrorAction SilentlyContinue
-        Write-Host "[成功] 已结束该进程，端口 8080 已释放。" -ForegroundColor Green
+        Write-Host "[成功] 已结束该进程，端口 $backendPort 已释放。" -ForegroundColor Green
     } else {
         Write-Host "[跳过] 未结束其它程序的进程。" -ForegroundColor Yellow
     }

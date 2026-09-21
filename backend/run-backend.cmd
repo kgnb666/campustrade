@@ -53,6 +53,27 @@ echo        or export the variables in your shell before starting the backend.
 echo.
 
 :env_report
+rem ---- backend port: .env's BACKEND_PORT is the single source of truth ----
+rem Spring Boot binds server.port from the SERVER_PORT environment variable, so the
+rem value read from .env above is exported under that name here. Nothing else in
+rem the repo needs to know the number: application.yml falls back to 8081 when
+rem SERVER_PORT is absent, and the launcher/stop scripts read .env directly.
+rem An explicitly exported SERVER_PORT still wins (that is Spring Boot's own
+rem override convention, used e.g. to run an isolated instance on another port
+rem without editing .env); .env fills it in only when it is not set.
+rem PORT_SOURCE is printed below so "why is it listening on that port" is always
+rem answerable from the console without reading this script.
+set "PORT_SOURCE="
+if defined SERVER_PORT set "PORT_SOURCE=environment variable SERVER_PORT"
+if not defined SERVER_PORT (
+    if defined BACKEND_PORT set "SERVER_PORT=%BACKEND_PORT%"
+    if defined BACKEND_PORT set "PORT_SOURCE=.env BACKEND_PORT"
+)
+if not defined SERVER_PORT (
+    set "SERVER_PORT=8081"
+    set "PORT_SOURCE=built-in default"
+)
+
 rem Never echo credential values - only whether they are present.
 if not defined JWT_SECRET (
     echo [WARN] JWT_SECRET is not set. The backend will refuse to start and print
@@ -67,7 +88,7 @@ if not defined SPRING_DATASOURCE_PASSWORD (
     echo        connect to PostgreSQL. Fill it in .env ^(value is never printed^).
 )
 
-echo [*] Port  : 8080 (context path /api)
+echo [*] Port  : %SERVER_PORT% ^(context path /api; source: %PORT_SOURCE%^)
 echo [*] Starting Spring Boot - first run needs to resolve dependencies and run
 echo     Flyway migrations, please wait...
 echo.

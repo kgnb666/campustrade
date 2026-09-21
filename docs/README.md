@@ -109,6 +109,9 @@ docker compose ps
 
 > 端口冲突时改 `.env` 里的 `POSTGRES_PORT` / `REDIS_PORT` / `MINIO_PORT` / `MINIO_CONSOLE_PORT`，
 > 同时把 `SPRING_DATASOURCE_PORT` / `SPRING_DATA_REDIS_PORT` / `MINIO_ENDPOINT` / `MINIO_URL_PREFIX` 改成对应值。
+> **后端自身的端口不在这里**：它由 `.env` 的 `BACKEND_PORT`（当前 8081）单点配置，
+> 启动脚本、停止脚本、`application.yml` 与前端默认基址都从这一处派生（详见根 README 的
+> 「后端端口只在一处配置」一节）。
 
 ### 2. 后端服务启动
 
@@ -117,7 +120,8 @@ cd backend
 mvn -B test              # 257 项；中间件由 Testcontainers 现拉现用，不碰开发库（需要可用的 Docker）
 mvn spring-boot:run      # 或双击 backend/run-backend.cmd（自动加载项目根目录 .env）
 ```
-后端监听 `http://127.0.0.1:8080`，上下文路径 `/api`。
+后端监听 `http://127.0.0.1:8081`，上下文路径 `/api`（端口由项目根目录 `.env` 的
+`BACKEND_PORT` 决定，缺省 8081；8080 被同机另一个项目占用，故不再使用）。
 首次启动会由 Flyway 从空库执行全部迁移（V1..V12）建出完整结构（详见第五节）。
 
 ### 3. 前端应用启动
@@ -129,8 +133,8 @@ flutter analyze          # 期望 0 issue
 flutter test             # 187 项
 flutter run -d chrome    # 或双击 frontend/run-frontend.cmd run -d chrome
 ```
-Web 端 API 基址默认 `http://127.0.0.1:8080/api`（`lib/config/app_config.dart`），
-用 `--dart-define=API_BASE_URL=...` 覆盖；Web 部署（SPA 回退、Nginx、缓存）见 [frontend/README.md](../frontend/README.md)。
+Web 端 API 基址默认 `http://127.0.0.1:8081/api`（`lib/config/app_config.dart`，与 `.env` 的
+`BACKEND_PORT` 同号），用 `--dart-define=API_BASE_URL=...` 覆盖；Web 部署（SPA 回退、Nginx、缓存）见 [frontend/README.md](../frontend/README.md)。
 
 ---
 
@@ -174,8 +178,8 @@ Web 端 API 基址默认 `http://127.0.0.1:8080/api`（`lib/config/app_config.da
 
 | 交付物 | 说明 |
 | :--- | :--- |
-| `backend/Dockerfile` | 多阶段构建（maven + JDK 21 → JRE 21 alpine）；非 root（uid 10001）；`EXPOSE 8080`；内置 `HEALTHCHECK` 探活 `/api/school/list`；不含任何凭据 |
-| `docker-compose.prod.yml` | app + postgres + redis + minio；`depends_on: service_healthy`；中间件不发布端口；镜像 tag 固定；日志轮转与资源上限；Redis 强制口令；镜像 `campustrade-backend:<tag>` |
+| `backend/Dockerfile` | 多阶段构建（maven + JDK 21 → JRE 21 alpine）；非 root（uid 10001）；`EXPOSE 8081`（容器内外同号）；内置 `HEALTHCHECK` 探活 `/api/school/list`；不含任何凭据 |
+| `docker-compose.prod.yml` | app + postgres + redis + minio；`depends_on: service_healthy`；中间件不发布端口；应用容器内/宿主发布端口统一 8081（`SERVER_PORT` / `APP_PORT`）；镜像 tag 固定；日志轮转与资源上限；Redis 强制口令；镜像 `campustrade-backend:<tag>` |
 | 生产 profile | `application-prod.yml` + `ProdSecretsGuard`：数据库/Redis/MinIO/CORS 缺项即拒绝启动；日志固定 INFO 且关闭 MyBatis SQL 打印；连接池与超时收敛 |
 | 前端 | `flutter build web` + SPA 回退部署说明见 `frontend/README.md` |
 
@@ -191,9 +195,9 @@ CampusTrade/
 ├── backend/                            # Spring Boot 3 + Java 21 后端
 │   ├── Dockerfile                      # 生产镜像（多阶段、非 root、健康检查）
 │   ├── .dockerignore                   # 构建上下文裁剪（排除 target/、logs/）
-│   ├── run-backend.cmd                 # 本地启动（ASCII；加载 .env、解析工具链）
+│   ├── run-backend.cmd                 # 本地启动（ASCII；加载 .env、解析工具链、BACKEND_PORT→SERVER_PORT）
 │   ├── resolve-toolchain.cmd           # JDK/Maven 解析（可单独运行诊断）
-│   ├── check-port.cmd                  # 8080 占用者诊断
+│   ├── check-port.cmd                  # 后端端口占用者诊断（缺省读 .env 的 BACKEND_PORT）
 │   ├── docs/                           # 后端模块级说明
 │   ├── logs/                           # 运行日志（logs/campustrade.log，[DEV-ONLY] 验证码在此）
 │   ├── pom.xml

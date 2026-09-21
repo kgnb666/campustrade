@@ -9,6 +9,77 @@
 
 ---
 
+## 2026-09-21 — 后端端口改到 8081，并收敛为「只在一处配置」（工作区未提交）
+
+**为什么换端口**：本机 8080 已被同机的另一个项目长期占用（图书管理系统，`com.library.Application`）。
+CampusTrade 此前把 8080 写死在至少 7 处：`application.yml`、`start.ps1`、`stop.ps1`、
+`backend/run-backend.cmd`、`backend/check-port.cmd`、`backend/Dockerfile`、`docker-compose.prod.yml`、
+前端默认基址与文档。只改一个数字必然留下"启动器去 8080 找、后端其实在 8081"这类半通状态，
+所以本次把端口收敛到**一处**，其余位置一律改为读同一个值。
+
+**单一来源**：项目根目录 `.env` 的 `BACKEND_PORT`（模板 `.env.example`，当前 `8081`）。读取链路：
+
+| 读取方 | 怎么拿到端口 |
+| :--- | :--- |
+| `backend/run-backend.cmd` | 解析 `.env` 后导出为环境变量 `SERVER_PORT`（Spring Boot 绑定 `server.port` 的约定名）；已在外部显式导出的 `SERVER_PORT` 优先（Spring Boot 自带的覆盖约定，便于"不改 `.env` 跑一个隔离端口实例"），控制台会打印端口来源 |
+| `backend/src/main/resources/application.yml` | `server.port: ${SERVER_PORT:8081}`（读不到时回退 8081） |
+| `start.ps1` | 读 `.env` 的 `BACKEND_PORT`：占用预检、占用者归属判定、启动中被抢占判定、等待循环、提示 URL、末尾导航全部用它 |
+| `stop.ps1` | 读同一个键，决定"停止哪个端口的后端进程" |
+| `backend/check-port.cmd` | 缺省读同一个键，也可用第一个参数显式覆盖（便于诊断任意端口） |
+| `frontend/lib/config/app_config.dart` | 编译期常量默认 `http://127.0.0.1:8081/api`（与 `BACKEND_PORT` 同号，`--dart-define=API_BASE_URL` 仍可覆盖） |
+
+生产编排是独立部署物，不读本地 `.env`：`docker-compose.prod.yml` 注入 `SERVER_PORT=8081`，
+`backend/Dockerfile` 的 `EXPOSE 8081` / `HEALTHCHECK` 探针与之一致，容器内外同号
+（不再有"容器内 8080 / 宿主机 8081"两套心智模型）；宿主发布端口可用 `APP_PORT` 调整。
+
+**如何再改端口**：只改 `.env` 的 `BACKEND_PORT`，并把 `.env` 的 `API_BASE_URL` 与
+`frontend/lib/config/app_config.dart` 的 `defaultValue` 改成同号（Flutter 不读 `.env`，这是唯一
+需要人工同步的一处）；启动脚本、停止脚本、占用诊断、后端端口与文档示例 URL 都会跟着变。
+生产要换内部端口则改 `docker-compose.prod.yml` 的 `SERVER_PORT` / `ports` / `healthcheck` 与 Dockerfile。
+
+**验证（实际跑过的结果，均在 8080 被图书管理系统占用（PID 5964）的前提下）**
+
+- **关键验收**：`start.bat` 选 4 → `[*] 等待本项目后端监听 8081` → `[成功] 后端服务已就绪！
+  (http://127.0.0.1:8081/api)`，末尾导航的 API 地址也是 8081；
+  `curl http://127.0.0.1:8081/api/school/list` → **HTTP 200**（返回真实高校 JSON）；
+  后端日志 `Tomcat started on port 8081 (http) with context path '/api'`。
+  跑前跑后查询 8080 占用者：PID 均为 **5964**（同一进程、同一启动时间）→ 图书管理系统未受任何影响。
+- **冲突路径仍有效**：`python -m http.server 8081` 占住 8081 后 `start.bat` 选 4 →
+  `[警告] 端口 8081 已被其它程序占用，CampusTrade 后端无法启动。占用进程: python.exe (PID 19168)`，
+  退出码 **1**；改用选 1（完整启动）同样中止，Flutter 进程数 前 0 → 后 0（**未拉起前端**）。
+- **改端口只需改一处**：把 `.env` 的 `BACKEND_PORT` 临时改为 `8082`，`start.bat` 选 4 →
+  等待提示与成功 URL 均为 8082，`curl http://127.0.0.1:8082/api/school/list` → 200，
+  日志 `Tomcat started on port 8082`；验证完成后已把 `.env` 改回 8081（`.env` 为 git-ignored 本地文件）。
+- **端口来源可解释（`SERVER_PORT` 显式覆盖优先）**：`set SERVER_PORT=18082 && run-backend.cmd` →
+  控制台 `[*] Port  : 18082 (context path /api; source: environment variable SERVER_PORT)`，
+  `curl http://127.0.0.1:18082/api/school/list` → 200（应用确实落在 18082，而不是 `.env` 的 8081）；
+  未显式导出时同一行为 `.env` 值、再兜底 8081（三个分支用与脚本逐字相同的批处理片段实测：
+  缺省 → `8081 / built-in default`；`BACKEND_PORT=8082` → `8082 / .env BACKEND_PORT`；
+  `BACKEND_PORT=8082` + `SERVER_PORT=18082` → `18082 / environment variable SERVER_PORT`）。
+- **前端默认基址**：`flutter build web` 产物 `build/web/main.dart.js` 中 `127.0.0.1:8081/api`
+  出现 2 次、`8080/api` 0 次（该产物经 `python -m http.server` 实际服务后再从 HTTP 取回核对，结果一致）；
+  `lib/config/app_config.dart` 默认值与 README / docs / CONTRIBUTING 的示例 URL 全部一致。
+- **门禁**：`cd backend && mvn -B test` → `Tests run: 257, Failures: 0, Errors: 0, Skipped: 0`（BUILD SUCCESS）；
+  `cd frontend && flutter analyze` → `No issues found!`；`flutter test` → `+187: All tests passed!`。
+- **编码抽检**：`start.ps1` / `stop.ps1` 前 3 字节 = `ef bb bf`（UTF-8 with BOM）；
+  `start.bat` / `stop.bat` / `backend/run-backend.cmd` / `backend/check-port.cmd` 经 `file` 判定为
+  ASCII 且全文件无 0x80 以上字节。
+- **占用诊断脚本**：`backend/check-port.cmd 8080` 报
+  `Port 8080 is held by another program: com.library.Application from D:/wkk/Campus Library Borrowing System (PID 5964)`
+  并退出 1（只读判定，不碰对方进程）；`backend/check-port.cmd`（无参数）按 `.env` 取 8081；
+  非法参数（`abc`）会提示并回退 8081，避免"查询失败被误判成端口空闲"。
+
+**受影响文件**：`.env`（本地，git-ignored）、`.env.example`、`backend/src/main/resources/application.yml`、
+`backend/run-backend.cmd`、`backend/check-port.cmd`、`start.ps1`、`stop.ps1`、
+`backend/Dockerfile`、`docker-compose.prod.yml`、`frontend/lib/config/app_config.dart`、
+`frontend/test/stage7d_status_contract_test.dart`、`frontend/test/order_api_test.dart`（两处仅 mock 基址字符串，
+断言语义未变）、`frontend/integration_test/app_smoke_test.dart`（注释）、`README.md`、`docs/README.md`、
+`frontend/README.md`、`CONTRIBUTING.md`。
+
+> `docs/stage*/`、`docs/final-audit/` 里的历史快照按约定**不改**（它们是当时的记录，不是现状说明）。
+
+---
+
 ## 2026-09-21 — 代码整洁、测试收敛与小加固（本批次，工作区未提交）
 
 **范围**：JWT 校验比对 userId、认证测试用例自治、商品详情查询数评估、HTML 转义策略落地与守护测试、
