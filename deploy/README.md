@@ -124,6 +124,26 @@ sudo docker compose -f docker-compose.prod.yml -f deploy/docker-compose.edge.yml
 - 迁移由 Flyway 在应用启动时执行；`prod` 下 `baseline-on-migrate=false`，
   一个"非空但没有 `flyway_schema_history`"的库会拒绝启动（这是刻意设计）。
 
+### 4.1 新增/修改环境变量时的完整流程（漏一步就会"代码是新的、行为还是旧的"）
+
+环境变量要走**三段**才能生效，缺任何一段都会表现为"新功能不生效"：
+
+```bash
+# ① 仓库：docker-compose.prod.yml 里把变量透传给容器（形如 FOO: ${FOO:-默认值}）
+cd /opt/campustrade && git pull --ff-only
+
+# ② 生产变量文件：写入实际取值（600 权限，不进仓库）
+sudo vi /etc/campustrade/prod.env      # 例：VERIFY_DEMO_MODE_ENABLED=true
+
+# ③ 重建容器（改 env 不会自动生效，必须重建）
+$COMPOSE up -d app
+sudo docker exec campustrade-prod-app sh -c 'env | grep 你的变量名'   # 验证确实进去了
+```
+
+真实案例：校园认证演示模式上线时，只改了 `/etc/campustrade/prod.env` 却没在服务器
+`git pull` 最新的 `docker-compose.prod.yml`，结果变量没透传进容器 —— 代码是新的、
+开关却像没生效（现象是仍然去发真实邮件并失败）。
+
 ---
 
 ## 五、已知坑（踩过的，别再踩）
