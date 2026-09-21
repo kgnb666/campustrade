@@ -94,6 +94,13 @@ services:
       MAIL_PASSWORD: ${MAIL_PASSWORD:-}
       MAIL_FROM: ${MAIL_FROM:-}
       MAIL_SSL_ENABLED: ${MAIL_SSL_ENABLED:-true}
+      # 校园认证演示模式（默认全关）：给"没有学校邮箱也要演示认证流程"用。
+      # 只对 VERIFY_DEMO_EMAILS 里点名的邮箱生效：那些邮箱不发真实邮件，
+      # 验证码随 /student/verify 响应返回，前端自动填入并标注"演示模式"。
+      # 未列入白名单的邮箱完全走原有邮件通道；两个变量都留空即为关闭。
+      # 演示结束后把 VERIFY_DEMO_MODE_ENABLED 置回 false 即可（开启时启动日志会点名白名单邮箱）。
+      VERIFY_DEMO_MODE_ENABLED: ${VERIFY_DEMO_MODE_ENABLED:-false}
+      VERIFY_DEMO_EMAILS: ${VERIFY_DEMO_EMAILS:-}
       TZ: Asia/Shanghai
       # 容器内存上限的 75% 作为 JVM 堆上限（见 Dockerfile 的 JAVA_OPTS）
       JAVA_OPTS: "-XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"

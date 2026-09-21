@@ -9,6 +9,66 @@
 
 ---
 
+## 2026-09-21 — 校园认证「演示模式」：没有学校邮箱也能演示认证流程（工作区未提交）
+
+**为什么加**：校园认证是发布商品的硬前置，而它的验证码按设计**只**能经真实邮件送到学生校园邮箱
+（`/student/verify` 的 `data` 恒为 `null`，那是接口契约的一部分）。个人开发者没有学校邮箱，
+这条链路根本无法演示：邮件发到收不到的地址，响应里又没有码，流程必然卡在输码。
+
+**做法**：新增一条**只对白名单邮箱生效**的演示通道，而不是一个全局开关。
+全局开关（"开启后所有邮箱都回传验证码"）等于让校园认证在全站变成零成本自证；
+白名单把影响面钉死在配置点名的几个邮箱上。
+
+| 配置 | 默认 | 含义 |
+| :--- | :--- | :--- |
+| `verify.demo-mode-enabled`（`VERIFY_DEMO_MODE_ENABLED`） | `false` | 演示模式总开关，单独打开无效 |
+| `verify.demo-emails`（`VERIFY_DEMO_EMAILS`） | 空 | 逗号分隔的邮箱白名单 |
+
+**改动清单**
+
+| 位置 | 变更 |
+| :--- | :--- |
+| `config/VerifyProperties.java` | 新增两个属性 + `isDemoModeActive()` / `isDemoEmail()` / `normalizedDemoEmails()`；白名单为空（含 `null`、空白项）一律视为**未开启** |
+| `config/VerifyDemoGuard.java`（新增） | 启动期护栏：开关打开却没有白名单 → 拒绝启动（那多半是配置事故）；生效时打一条点名白名单邮箱的 `WARN`，让"忘了关"可见 |
+| `service/mail/VerifyCodeMailSender.java` | 返回值由 `void` 变为 `Channel{MAIL, DEV_LOG, DEMO}`；演示分支放在 `mail-enabled` 判断**之前**（演示机通常是 prod + `mail-enabled=true`，而那里的学生邮箱是虚构的，真发信只会退信） |
+| `vo/VerifySubmitVO.java`（新增） | `{demoMode, demoCode}`；**正常通道下整个对象为 `null`**，即响应 `data` 恒为 null 的既有契约不变 |
+| `service/StudentVerifyService(.Impl)` | `submitVerify` 返回 `VerifySubmitVO`（正常通道返回 `null`），javadoc 同步说明 |
+| `controller/StudentVerifyController.java` | `Result<VerifySubmitVO>`；文案常量与核销路径完全未动 |
+| `frontend/.../auth_controller.dart` | 新增 `verifyDemoCode`（`RxString`）与 `isVerifyDemoMode`；`submitVerify` 仍返回 `bool`，正常通道行为不变 |
+| `frontend/.../student_verify_page.dart` | 演示模式下自动填入验证码，提示条换成「演示模式：当前环境未发送真实邮件……」 |
+| `application.yml` / `.env.example` / `docker-compose.prod.yml` | 两个环境变量的文档与透传（默认全关） |
+| `README.md` | 新增「3.1 没有学校邮箱时怎么演示校园认证（演示模式）」：分步演示脚本 + 三个必知事项 |
+
+**验证结论**
+
+- 后端新增 `CampusTradeDemoVerifyTests`（6 个用例，全通过）：
+  ① 演示闭环（白名单邮箱 → `demoCode` 为 6 位数字 → 凭该码核销 → 库里 `SUCCESS` + `verify_time`）；
+  ② **同一学校但不在白名单的邮箱**：演示模式已开启，响应 `data` 仍为 `null`，验证码不出现于响应体；
+  ③ 演示分支完全不触碰 `JavaMailSender`（用"调用即抛"的桩证明）；
+  ④ 非白名单邮箱仍走原通道（SMTP 失败照样抛 500、不降级返回验证码；`mail-enabled=false` 时仍是日志通道）；
+  ⑤ 判定规则（空列表 / 全空白 / `null` 均视为未开启；大小写与首尾空白归一化）；
+  ⑥ 启动期护栏（开关开着 + 空白名单 → 拒绝启动；关闭或配置齐全都放行）。
+- **反向验证（确认用例真能抓到回归）**：把演示分支条件由 `isDemoEmail(邮箱)` 改成 `isDemoModeActive()`
+  （即"全局放开"），用例 ②④ 立即失败；改回后 6/6 通过。
+- 前端新增 `demo_verify_test.dart`（2 个用例，全通过）：演示模式自动填入 `135790`、页面出现
+  「演示模式」/「未发送真实邮件」提示条、snackbar 内容与 6 秒时长；**正常通道**（`data: null`）下
+  控制器不保留验证码、输入框为空、页面不出现「演示模式」字样。
+- **实测反馈后追加的两条演示放开**（都只对白名单邮箱生效，因为实测时第一轮演示就被挡住了）：
+  ① `submitVerify` 对白名单邮箱**跳过发送限流**——否则第 4 次就报「验证码请求过于频繁，请 10 分钟后再试」，
+  且同一邮箱 24 小时只能用 3 次，演示根本演不完（限流的两个理由在演示通道都不成立：不发信，就没有
+  "打满他人邮箱额度 / 投递垃圾邮件"的问题）；
+  ② `submitVerify` 对白名单邮箱**允许把已认证的行重置回 PENDING**——否则同一个演示邮箱只能演一次，
+  第二轮核销必然 409「该校园邮箱已完成认证，无需重复核销」，而演示要看的恰恰是"未认证 → 已认证"
+  这次跃迁。非白名单邮箱的限流与"SUCCESS 行不允许被申请动作回退"原样保留。
+- 对应新增用例 7/8/9：同一邮箱连续两轮演示都成功（中间状态 PENDING → SUCCESS）；
+  白名单邮箱连打 4 次全部成功**且限流计数器根本没被增加**，而非白名单邮箱第 4 次必须 429；
+  非白名单邮箱重复申请后状态仍是 SUCCESS、`verify_time` 不变，重复核销仍 409。
+- 全量门禁：前端 `flutter analyze` 无 issue、`flutter test` 200/200；后端 `mvn test` 272/272（含新增 9 例）。
+- README 补上"撞到限流提示怎么办"（清 `student:verify:send:*` 计数键的命令）与"换账号演示同一邮箱
+  会撞邮箱唯一性"的处理办法。
+
+---
+
 ## 2026-09-21 — 首页从「开发进度说明页」改为「面向用户的可用首页」（工作区未提交）
 
 **为什么改**：首页此前是 Stage 0/1 遗留的"开发进度说明页"——两张静态卡片写着

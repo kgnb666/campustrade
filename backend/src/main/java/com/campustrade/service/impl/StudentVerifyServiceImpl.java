@@ -17,6 +17,7 @@ import com.campustrade.mapper.StudentVerifyMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.service.StudentVerifyService;
 import com.campustrade.service.mail.VerifyCodeMailSender;
+import com.campustrade.vo.VerifySubmitVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -70,7 +71,7 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void submitVerify(String username, StudentVerifyDTO dto) {
+    public VerifySubmitVO submitVerify(String username, StudentVerifyDTO dto) {
         // 1. 获取当前用户
         User user = userMapper.selectOne(
                 new LambdaQueryWrapper<User>().eq(User::getUsername, username)
@@ -95,8 +96,17 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
             );
         }
 
-        // 4. 发送频率限制：按用户（10min/3 次）与"发起人 × 邮箱"（24h/3 次）双向限流，超限直接拒绝
-        enforceSendLimits(user.getId(), email);
+        // 4. 发送频率限制：按用户（10min/3 次）与"发起人 × 邮箱"（24h/3 次）双向限流，超限直接拒绝。
+        //    演示通道（白名单邮箱）跳过限流：限流的两个理由在演示通道上都不成立——那台环境根本不发信
+        //    （没有"打满他人邮箱额度 / 投递垃圾邮件"的问题），而演示本身就要反复点几次才能演完；
+        //    若照旧限流，演示到第 4 次就会卡在"请求过于频繁，请 10 分钟后再试"，24 小时内更是只能用 3 次。
+        boolean demoEmail = verifyProperties.isDemoEmail(email);
+        if (demoEmail) {
+            log.warn("校园认证演示模式：跳过发送限流（仅白名单邮箱）: email={}, userId={}",
+                    VerifyCodeMailSender.maskEmail(email), user.getId());
+        } else {
+            enforceSendLimits(user.getId(), email);
+        }
 
         // 5. 生成 6 位随机数字验证码并写入 Redis (TTL: 5 分钟)
         String verifyCode = String.format("%06d", ThreadLocalRandom.current().nextInt(100000, 1000000));
@@ -118,17 +128,31 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
         );
 
         LocalDateTime now = LocalDateTime.now();
-        if (existingVerify != null && !STATUS_SUCCESS.equalsIgnoreCase(existingVerify.getVerifyStatus())) {
+        if (existingVerify != null
+                && (!STATUS_SUCCESS.equalsIgnoreCase(existingVerify.getVerifyStatus()) || demoEmail)) {
+            // 演示通道下的第二个例外：白名单邮箱**已经认证成功**时，也把这一行重置回 PENDING。
+            // 否则同一个演示邮箱只能演示一次——第二轮会在核销时报"该校园邮箱已完成认证，无需重复核销"，
+            // 而演示要看的恰恰是"未认证 → 认证成功"这次状态跃迁。重置只作用于调用者自己名下的记录，
+            // 且只对配置点名的演示邮箱生效；唯一索引仅约束 SUCCESS 行，重置为 PENDING 不会与之冲突。
+            if (demoEmail && STATUS_SUCCESS.equalsIgnoreCase(existingVerify.getVerifyStatus())) {
+                log.warn("校园认证演示模式：将已认证的演示邮箱重置为待认证，以便重复演示（仅白名单邮箱）: email={}, userId={}",
+                        VerifyCodeMailSender.maskEmail(email), user.getId());
+            }
+
             // 定点更新 + 前置条件：只改写四个业务字段，并把"不是 SUCCESS"作为 WHERE 条件。
             // 原实现用 updateById(整行回写)：并发下会把同一行的其它字段（例如刚刚核销写入的
             // verify_status / verify_time）用旧快照覆盖回去（本人自伤）。
-            int updated = studentVerifyMapper.update(null, new LambdaUpdateWrapper<StudentVerify>()
+            LambdaUpdateWrapper<StudentVerify> resetToPending = new LambdaUpdateWrapper<StudentVerify>()
                     .set(StudentVerify::getSchoolId, school.getId())
                     .set(StudentVerify::getStudentNumber, dto.getStudentNumber().trim())
                     .set(StudentVerify::getSchoolEmail, email)
                     .set(StudentVerify::getVerifyStatus, STATUS_PENDING)
-                    .eq(StudentVerify::getId, existingVerify.getId())
-                    .ne(StudentVerify::getVerifyStatus, STATUS_SUCCESS));
+                    .eq(StudentVerify::getId, existingVerify.getId());
+            if (!demoEmail) {
+                // 非演示通道必须保留"不是 SUCCESS 才改写"的前置条件：SUCCESS 行不允许被申请动作回退
+                resetToPending.ne(StudentVerify::getVerifyStatus, STATUS_SUCCESS);
+            }
+            int updated = studentVerifyMapper.update(null, resetToPending);
             if (updated != 1) {
                 log.info("认证申请行状态已变更，跳过 PENDING 改写: userId={}, verifyId={}, updated={}",
                         user.getId(), existingVerify.getId(), updated);
@@ -146,19 +170,29 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
             studentVerifyMapper.insert(newVerify);
         }
 
-        // 7. 下发验证码：真实邮件（mail-enabled=true）或本地开发日志通道
+        // 7. 下发验证码：演示通道（仅白名单邮箱）优先，其余走真实邮件 / 本地开发日志通道
+        VerifyCodeMailSender.Channel channel;
         try {
-            verifyCodeMailSender.sendVerifyCode(email, school.getSchoolName(), verifyCode);
+            channel = verifyCodeMailSender.sendVerifyCode(email, school.getSchoolName(), verifyCode);
         } catch (BusinessException e) {
             // 下发失败时清理刚生成的验证码：避免留下"学生永远收不到、却真实可用"的验证码
             stringRedisTemplate.delete(redisKey);
             throw e;
         }
 
+        if (channel == VerifyCodeMailSender.Channel.DEMO) {
+            // 演示通道：验证码随响应返回给调用方（见 VerifySubmitVO 的说明）。
+            // 这里刻意不打验证码明文——它已经交给调用方，再落进日志只会扩大凭据的留存面。
+            log.warn("校园认证走演示通道：验证码随响应返回，未发送真实邮件（仅限演示环境）: email={}, userId={}",
+                    VerifyCodeMailSender.maskEmail(email), user.getId());
+            return VerifySubmitVO.builder().demoMode(true).demoCode(verifyCode).build();
+        }
+
         // 安全要求：验证码属于一次性凭据，绝不能写入业务日志（日志会被长期留存并被多人查看）；
         // 这里只记录掩码后的校园邮箱、TTL 与用户 ID，足够定位问题但不含任何凭据信息。
         log.info("校园认证验证码已生成并下发: email={}, ttlMinutes={}, userId={}",
                 VerifyCodeMailSender.maskEmail(email), codeTtlMinutes, user.getId());
+        return null;
     }
 
     @Override

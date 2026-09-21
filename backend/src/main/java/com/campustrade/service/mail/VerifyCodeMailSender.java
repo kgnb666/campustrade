@@ -18,17 +18,21 @@ import java.nio.charset.StandardCharsets;
 /**
  * 校园认证验证码下发通道（唯一出口）。
  *
- * <p>校园认证验证码是一次性凭据，它的去向只有两个，取决于 {@code verify.mail-enabled}：</p>
+ * <p>校园认证验证码是一次性凭据，它的去向有三个，取决于配置：</p>
  * <ul>
- *   <li><b>{@code true}（生产必须）</b>：经 SMTP 发送到学生校园邮箱。发送失败时抛出明确的业务错误，
+ *   <li><b>{@code mail-enabled=true}（生产必须）</b>：经 SMTP 发送到学生校园邮箱。发送失败时抛出明确的业务错误，
  *       <b>绝不</b>降级为"把验证码写进日志或响应"——降级等于把认证重新变回零成本自证；</li>
- *   <li><b>{@code false}（仅本地开发）</b>：验证码写入服务端日志文件，供本机联调时取用。
+ *   <li><b>{@code mail-enabled=false}（仅本地开发）</b>：验证码写入服务端日志文件，供本机联调时取用。
  *       该分支在 prod profile 下不可达（{@link com.campustrade.config.VerifyMailProdGuard} 会拒绝启动），
  *       这里再做一次防御性判断，确保验证码在任何情况下都不会因为"配置写错"而被写进生产日志。</li>
+ *   <li><b>演示通道（{@code verify.demo-mode-enabled} + {@code verify.demo-emails} 白名单）</b>：
+ *       命中白名单的邮箱既不发邮件也不写日志，验证码改由调用方随接口响应返回，供"没有学校邮箱
+ *       也要演示认证流程"的场景使用。它<b>只对配置点名的邮箱生效</b>，其余邮箱的链路完全不变。</li>
  * </ul>
  *
  * <p><b>日志纪律</b>：全类中只有 {@code [DEV-ONLY]} 那一行允许出现验证码明文，且它只在
- * {@code mail-enabled=false} 且非 prod 时执行。其余日志一律只记录掩码后的邮箱与结果。</p>
+ * {@code mail-enabled=false} 且非 prod 时执行。演示通道的日志只点名邮箱、不含验证码
+ * （验证码已随响应返回给调用方，不需要也不应该再落进日志）。其余日志一律只记录掩码后的邮箱与结果。</p>
  */
 @Slf4j
 @Component
@@ -37,6 +41,18 @@ public class VerifyCodeMailSender {
 
     /** 本地开发通道的固定标记：便于日志巡检与安全扫描一眼识别"此处会打印验证码"。 */
     public static final String DEV_ONLY_TAG = "[DEV-ONLY]";
+
+    /**
+     * 验证码实际去向。调用方据此判断"验证码是否已经离开服务端"。
+     */
+    public enum Channel {
+        /** 经 SMTP 发送到学生校园邮箱 */
+        MAIL,
+        /** 写入服务端日志（仅本地开发） */
+        DEV_LOG,
+        /** 演示通道：未下发，由调用方随接口响应返回 */
+        DEMO
+    }
 
     private final VerifyProperties verifyProperties;
     private final ObjectProvider<JavaMailSender> javaMailSenderProvider;
@@ -48,9 +64,19 @@ public class VerifyCodeMailSender {
      * @param schoolEmail 学生校园邮箱（收件人）
      * @param schoolName  高校名称（用于邮件正文与日志）
      * @param verifyCode  6 位验证码明文
+     * @return 验证码的实际去向；{@link Channel#DEMO} 表示<b>没有</b>下发，调用方必须自行把验证码交给用户
      * @throws BusinessException 邮件通道故障时抛出（不降级、不返回验证码）
      */
-    public void sendVerifyCode(String schoolEmail, String schoolName, String verifyCode) {
+    public Channel sendVerifyCode(String schoolEmail, String schoolName, String verifyCode) {
+        // 演示通道优先级最高：命中白名单就既不发邮件也不写日志。
+        // 放在 mail-enabled 判断之前是刻意的——演示机通常 mail-enabled=true（prod 强制），
+        // 但那里的学生邮箱是虚构的，真发邮件只会得到退信，而学生永远收不到验证码。
+        if (verifyProperties.isDemoEmail(schoolEmail)) {
+            log.warn("校园认证演示模式：跳过验证码下发，验证码将随接口响应返回（仅限演示环境）: email={}",
+                    maskEmail(schoolEmail));
+            return Channel.DEMO;
+        }
+
         if (!verifyProperties.isMailEnabled()) {
             if (isProdProfile()) {
                 // 生产环境走到这里说明配置被改错了：宁可直接失败，也不能把验证码写进日志
@@ -62,12 +88,13 @@ public class VerifyCodeMailSender {
             log.info("{} 校园认证验证码已生成（仅限本地开发使用，生产环境必须 verify.mail-enabled=true 走真实邮件）"
                             + "email={}, code={}, ttlMinutes={}",
                     DEV_ONLY_TAG, maskEmail(schoolEmail), verifyCode, verifyProperties.getCodeTtlMinutes());
-            return;
+            return Channel.DEV_LOG;
         }
 
         sendByMail(schoolEmail, schoolName, verifyCode);
         log.info("校园认证验证码邮件已发送: email={}, ttlMinutes={}",
                 maskEmail(schoolEmail), verifyProperties.getCodeTtlMinutes());
+        return Channel.MAIL;
     }
 
     /**

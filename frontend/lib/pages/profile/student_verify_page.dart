@@ -8,8 +8,12 @@ import '../../utils/ui_feedback.dart';
 
 /// 校园身份认证页面
 ///
-/// 验证码由服务端通过真实邮件发送到校园邮箱，页面不再展示、也不再自动填充验证码：
+/// 正常情况下验证码由服务端通过真实邮件发送到校园邮箱，页面不展示、也不自动填充验证码：
 /// 用户必须查收邮件后手动输入，认证才具备"邮箱可达"的可信性。
+///
+/// 唯一的例外是服务端开启了**演示模式**（`verify.demo-mode-enabled` + 邮箱白名单）：
+/// 那台环境没有真实学校邮箱可用，接口会把验证码带回来。此时页面自动填入验证码并显著标注
+/// "演示模式"，让演示者能走通整条链路，同时不至于让人误以为"真的发出了邮件"。
 class StudentVerifyPage extends StatefulWidget {
   const StudentVerifyPage({super.key});
 
@@ -30,6 +34,7 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
   SchoolModel? _selectedSchool;
   bool _codeSent = false;
   String? _sentEmail; // 验证码实际发送到的校园邮箱，用于提示文案
+  String? _demoCode; // 演示模式下服务端带回的验证码（正常通道为 null）
   int _resendCountdown = 0;
   Timer? _countdownTimer;
 
@@ -72,10 +77,16 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
       return;
     }
 
+    // 演示模式：服务端把验证码带回来了（该邮箱在白名单内，没有发真实邮件），页面自动填入。
+    // 正常通道下 verifyDemoCode 为空，行为与从前完全一致——用户必须去邮箱里取码。
+    final demoCode = _authController.isVerifyDemoMode ? _authController.verifyDemoCode.value : null;
+
     setState(() {
       _codeSent = true;
       _sentEmail = _emailController.text.trim();
-      _verifyCodeController.clear(); // 新验证码需要重新输入，避免旧输入造成误判
+      _demoCode = demoCode;
+      // 新验证码需要重新输入，避免旧输入造成误判；演示模式下直接填入刚拿到的验证码
+      _verifyCodeController.text = demoCode ?? '';
       _resendCountdown = _resendCooldownSeconds;
     });
     _startCountdown();
@@ -267,27 +278,54 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
                     );
                   }),
 
-                  // 发送结果提示：只告知"已发送到哪个邮箱"，不再展示验证码
+                  // 发送结果提示：正常通道只告知"已发送到哪个邮箱"，不再展示验证码；
+                  // 演示模式则必须说清"没有发信、验证码已自动填入"，否则演示现场会一直去翻邮箱。
                   if (_codeSent) ...[
                     const SizedBox(height: 12),
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: Colors.blue.withAlpha(20),
+                        color: (_demoCode != null ? Colors.orange : Colors.blue).withAlpha(20),
                         borderRadius: BorderRadius.circular(6),
+                        border: _demoCode != null
+                            ? Border.all(color: Colors.orange.withAlpha(80))
+                            : null,
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            '验证码已发送至 ${_sentEmail ?? _emailController.text.trim()} 邮箱',
-                            style: TextStyle(fontSize: 13, color: Colors.blue[900]),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            '请在 5 分钟内查收（含垃圾邮件箱）并输入下方验证码；未收到可稍后重新发送。',
-                            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-                          ),
+                          if (_demoCode != null) ...[
+                            Row(
+                              children: [
+                                const Icon(Icons.science_outlined, size: 16, color: Colors.deepOrange),
+                                const SizedBox(width: 6),
+                                Text(
+                                  '演示模式',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.deepOrange[900],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '当前环境未发送真实邮件：验证码 ${_demoCode!} 已自动填入下方输入框，'
+                              '直接点击"完成认证"即可。',
+                              style: TextStyle(fontSize: 13, color: Colors.orange[900]),
+                            ),
+                          ] else ...[
+                            Text(
+                              '验证码已发送至 ${_sentEmail ?? _emailController.text.trim()} 邮箱',
+                              style: TextStyle(fontSize: 13, color: Colors.blue[900]),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '请在 5 分钟内查收（含垃圾邮件箱）并输入下方验证码；未收到可稍后重新发送。',
+                              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+                            ),
+                          ],
                         ],
                       ),
                     ),

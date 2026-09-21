@@ -305,13 +305,25 @@ class AuthController extends GetxController {
     }
   }
 
+  /// 演示模式下的验证码（空字符串 = 未走演示通道）。
+  ///
+  /// 只有服务端开启了演示模式（verify.demo-mode-enabled + 邮箱白名单）才会有值：
+  /// 那种环境没有真实学校邮箱可用，接口会把验证码带回来，认证页据此自动填入并标注"演示模式"。
+  /// 正常通道下该值恒为空——验证码只能从校园邮箱获取，这一点不因新增演示模式而改变。
+  final RxString verifyDemoCode = ''.obs;
+
+  /// 本次申请是否走了演示通道（页面据此显示"演示模式"提示条）
+  bool get isVerifyDemoMode => verifyDemoCode.value.isNotEmpty;
+
   /// 提交校园认证申请并发送验证码
   ///
-  /// 验证码由服务端通过真实邮件下发到校园邮箱，接口响应不再携带验证码（data 恒为空），
-  /// 因此这里只返回"是否已成功下发"，由页面引导用户查收邮件。
+  /// 验证码默认由服务端通过真实邮件下发到校园邮箱，接口响应不携带验证码（data 恒为空），
+  /// 因此这里只返回"是否已成功下发"，由页面引导用户查收邮件；演示模式下验证码还会
+  /// 出现在 [verifyDemoCode] 里，由页面自动填入。
   Future<bool> submitVerify(String schoolId, String studentNumber, String schoolEmail) async {
     try {
       isLoading.value = true;
+      verifyDemoCode.value = '';
       final response = await _dioClient.dio.post('/student/verify', data: {
         'schoolId': schoolId,
         'studentNumber': studentNumber.trim(),
@@ -319,11 +331,22 @@ class AuthController extends GetxController {
       });
 
       if (response.data['code'] == 200) {
-        safeSnackbar('验证码已发送', response.data['message'] ?? '验证码已发送至校园邮箱',
-            snackPosition: SnackPosition.BOTTOM,
-            duration: const Duration(seconds: 4),
-            backgroundColor: Colors.blue.withAlpha(40),
-            colorText: Colors.blue[900]);
+        verifyDemoCode.value = _extractDemoCode(response.data['data']) ?? '';
+
+        if (isVerifyDemoMode) {
+          // 演示模式没有真实邮件可查，必须把验证码直接告诉用户，否则演示现场无法继续
+          safeSnackbar('演示模式', '当前环境开启了演示模式，验证码 ${verifyDemoCode.value} 已自动填入',
+              snackPosition: SnackPosition.BOTTOM,
+              duration: const Duration(seconds: 6),
+              backgroundColor: Colors.blue.withAlpha(40),
+              colorText: Colors.blue[900]);
+        } else {
+          safeSnackbar('验证码已发送', response.data['message'] ?? '验证码已发送至校园邮箱',
+              snackPosition: SnackPosition.BOTTOM,
+              duration: const Duration(seconds: 4),
+              backgroundColor: Colors.blue.withAlpha(40),
+              colorText: Colors.blue[900]);
+        }
         return true;
       } else {
         AppLogger.error('[AuthController] submitVerify 业务失败: ${response.data['message']}');
@@ -351,6 +374,21 @@ class AuthController extends GetxController {
     } finally {
       isLoading.value = false;
     }
+  }
+
+  /// 从 /student/verify 的 data 中取出演示验证码
+  ///
+  /// 正常通道下 data 为 null（接口契约），因此必须容忍 null / 非 Map / 字段缺失：
+  /// 任何解析意外都不能让"验证码已下发"这个成功事实被误判为失败。
+  String? _extractDemoCode(dynamic data) {
+    if (data is! Map) {
+      return null;
+    }
+    final code = data['demoCode'];
+    if (code is! String || code.isEmpty) {
+      return null;
+    }
+    return code;
   }
 
   /// 提交邮箱验证码核验完成认证
