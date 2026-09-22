@@ -184,8 +184,8 @@ sudo docker exec campustrade-prod-app sh -c 'env | grep 你的变量名'   # 验
 - [ ] **安全组放通 8080**（腾讯云控制台 → 安全组/防火墙 → 入站规则 TCP 8080），
       否则外网访问 `http://129.204.61.68:8080` 会一直超时（服务器内部正常）。
 - [ ] **替换真实 SMTP**：当前 `/etc/campustrade/prod.env` 里是占位发信账号，
-      服务能启动，但**校园认证验证码发不出去**。换成真实账号后
-      `$COMPOSE up -d --force-recreate app` 生效。
+      服务能启动，但**校园认证验证码发不出去**（白名单邮箱走演示通道，见第七节）。
+      换成真实账号后 `$COMPOSE up -d --force-recreate app` 生效。
 - [ ] **HTTPS**：需要一个已解析的域名（大陆服务器还需 ICP 备案），
       之后在本目录加 certbot 或走腾讯云 SSL 证书 + Nginx 443。
 - [ ] **数据库备份**：目前没有任何自动备份机制（数据卷 ≠ 备份）。建议每日
@@ -194,3 +194,37 @@ sudo docker exec campustrade-prod-app sh -c 'env | grep 你的变量名'   # 验
       若将来从旧环境迁移数据，按根 README「2.3」执行一次。
 - [ ] **SSD 参数**：已在生产库执行 `ALTER DATABASE campustrade SET random_page_cost = 1.1`
       （对新建连接生效）。
+
+---
+
+## 七、校园认证演示模式（当前：已开启）
+
+**背景**：生产环境的 SMTP 还是占位账号，真实验证码发不出去；而校园认证是"发布商品的硬前置"，
+不打通就没法完整演示。演示模式让**白名单内**的邮箱跳过真实邮件，验证码随
+`POST /student/verify` 的响应返回，前端自动填入并标注"演示模式"。
+
+**当前白名单**（2026-09-22 开启，5 所学校的后缀各一条，本地部分统一用 `demo-verify`，
+一眼能看出是演示号、也不可能属于任何真实学生）：
+
+| 学校 | 演示邮箱 |
+| --- | --- |
+| 广西民族师范学院 | `demo-verify@gxnun.edu.cn` |
+| 清华大学 | `demo-verify@mails.tsinghua.edu.cn` |
+| 北京大学 | `demo-verify@pku.edu.cn` |
+| 复旦大学 | `demo-verify@fudan.edu.cn` |
+| 浙江大学 | `demo-verify@zju.edu.cn` |
+
+**怎么演示**：登录 → 个人中心 → 校园认证 → 选对应学校 + 填学号 + 填上表里同后缀的演示邮箱 →
+提交后验证码会直接提示并自动填入 → 提交即认证成功。
+
+**怎么关闭**（演示结束后建议关掉）：
+
+```bash
+sudo sed -i 's/^VERIFY_DEMO_MODE_ENABLED=.*/VERIFY_DEMO_MODE_ENABLED=false/' /etc/campustrade/prod.env
+sudo sed -i 's/^VERIFY_DEMO_EMAILS=.*/VERIFY_DEMO_EMAILS=/' /etc/campustrade/prod.env
+cd /opt/campustrade && $COMPOSE up -d app
+```
+
+**安全边界（已实测）**：白名单之外的邮箱链路一个字节没变——仍要过学校后缀校验、仍走真实邮件、
+发送失败不降级。开启期间每次启动都会有一条点名白名单的 WARN 日志（`VerifyDemoGuard`），
+"忘了关"能被立刻发现；把开关打开却不写白名单会直接拒绝启动。
