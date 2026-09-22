@@ -176,6 +176,12 @@ sudo docker exec campustrade-prod-app sh -c 'env | grep 你的变量名'   # 验
    所有认证请求变匿名 → 401 → 被"会话失效"流程踢回登录页（现象："能登录，一点就弹回"）。
    前端 `StorageService` 已改为三级降级（内存 → 安全存储 → SharedPreferences/localStorage），
    HTTP 部署下也能保存登录态；**但生产仍建议上 HTTPS**（安全存储可用即不触发降级）。
+9. **nginx 的 location 优先级会悄悄截走 `/img/` 与 `/api/`**：匹配顺序是
+   「最长前缀 location → 正则 location」，所以后写的静态资源正则
+   `location ~* \.(png|jpg|js|json|...)$` **优先于**前缀 location `/img/`、`/api/`。
+   症状是「MinIO 直连 200、经边缘却 404」，且只在带扩展名的路径上出现
+   （`/img/campustrade/` 列表反而正常，很容易误判成 MinIO 问题）。
+   本项目的 `/img/` 与 `/api/` 已加 `^~` 前缀修饰符（命中前缀即不再尝试正则）。
 
 ---
 
