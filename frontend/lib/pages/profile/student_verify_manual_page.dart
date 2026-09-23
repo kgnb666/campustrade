@@ -172,14 +172,21 @@ class _StudentVerifyManualPageState extends State<StudentVerifyManualPage> {
                       const SizedBox(height: 20),
                       if (status != null) _buildStatusBanner(status),
                       const SizedBox(height: 12),
-                      // 已认证 / 待审核时不给表单：前者没有必要，后者会造成重复提交
-                      if (status == null || status.isNone || status.isRejected)
-                        _buildForm(context)
-                      else
+                      // 表单该不该出现，只看**本通道（人工审核）**的进度：
+                      //   - 已认证（任一通道）→ 没必要再提交；
+                      //   - 人工通道待审核 → 再来一次只会把审核队列刷满；
+                      //   - 人工通道被驳回 → 必须能改材料重提；
+                      //   - 其它情况（含"邮箱通道有一条待核销"）→ 显示表单。
+                      // 最后一条是踩过的坑：账号在邮箱通道留过一条 PENDING 时，旧逻辑把
+                      // 它误判成"你已经提交过申请"，于是既不显示表单、也不显示任何提示，
+                      // 用户到了页面却找不到填学号的地方。
+                      if ((_status?.verified ?? false) || _hasPendingManualApplication)
                         TextButton(
                           onPressed: () => Get.offNamed(AppRoutes.studentVerify),
                           child: const Text('改用校园邮箱验证码认证'),
-                        ),
+                        )
+                      else
+                        _buildForm(context),
                     ],
                   ),
                 ),
@@ -213,7 +220,23 @@ class _StudentVerifyManualPageState extends State<StudentVerifyManualPage> {
         detail: '驳回原因：${status.reviewNote ?? '未填写'}（可修改材料后重新提交）',
       );
     }
+    if (status.isPending) {
+      // 走到这里说明 PENDING 是**邮箱通道**留下的（人工通道的 PENDING 已在上面处理）。
+      // 必须说清楚，否则用户会像旧版本那样：页面上什么都没有，却找不到填学号的地方。
+      return _banner(
+        icon: Icons.info_outline_rounded,
+        color: Colors.blue,
+        title: '你还有一份邮箱验证码认证在处理中',
+        detail: '想继续用邮箱认证，请返回上一页输入验证码；改用学号认证的话，提交后会覆盖那份申请。',
+      );
+    }
     return const SizedBox.shrink();
+  }
+
+  /// 是否已有一份「人工审核通道」的申请在等待审核（决定显示表单还是只显示提示）
+  bool get _hasPendingManualApplication {
+    final s = _status;
+    return s != null && s.isManual && s.isPending;
   }
 
   Widget _banner({

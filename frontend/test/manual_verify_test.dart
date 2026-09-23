@@ -195,4 +195,20 @@ void main() {
     expect(find.text('通过'), findsOneWidget);
     expect(find.text('驳回'), findsOneWidget);
   });
+
+  testWidgets('账号存在"邮箱通道待核销"记录时，本页仍必须显示填学号的表单', (tester) async {
+    installMockApi(status: {
+      'verifyStatus': 'PENDING',
+      'verifyMethod': 'EMAIL',
+      'verifyStatusDesc': '待核销/待审核',
+      'verified': false,
+    });
+    await openPage(tester, AppRoutes.studentVerifyManual);
+
+    expect(find.text('提交审核'), findsOneWidget,
+        reason: '邮箱通道的待核销记录不该挡住人工通道的表单——旧逻辑会让人进页面后找不到填学号的地方');
+    expect(find.textContaining('邮箱验证码认证在处理中'), findsOneWidget,
+        reason: '另一条通道还有在审申请时必须说明，否则用户不知道页面在等什么');
+    expect(find.byType(DropdownButtonFormField<SchoolModel>), findsOneWidget);
+  });
 }
