@@ -41,6 +41,13 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
   bool _isUploadingImage = false;
   bool _isSubmitting = false;
 
+  /// 本次是否已经成功提交过。
+  ///
+  /// 用途只有一个：**杜绝重复发布**。提交成功后按钮保持禁用，直到离开本页——
+  /// 曾经的线上事故里，用户因为"页面毫无变化"以为失败而连点 9 次，
+  /// 每次请求在后端都成功了，于是同一件商品被发布了 9 次。
+  bool _published = false;
+
   /// 编辑模式：由「我的商品」或商品详情页传入商品 ID 时进入；为空表示新建
   String? _editingGoodsId;
   bool get _isEditing => _editingGoodsId != null;
@@ -268,8 +275,6 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
           colorText: Colors.white,
         );
       }
-      // 提交成功才关闭页面并把"成功"结果回传给列表页（否则列表不会刷新）
-      Get.back(result: true);
     } catch (e, stack) {
       AppLogger.error(
           _isEditing ? '[CreateGoodsPage] updateGoods error' : '[CreateGoodsPage] createGoods error',
@@ -282,8 +287,25 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
             fallback: _isEditing ? '商品修改失败' : '商品发布失败'),
         snackPosition: SnackPosition.BOTTOM,
       );
+      // 失败时留在本页让用户修改，不做任何跳转
+      return;
     } finally {
       if (mounted) setState(() => _isSubmitting = false);
+    }
+
+    // 跳转放在 try/catch **之外**：导航本身出问题不能被当成"提交失败"。
+    //
+    // 线上事故复盘：这段原本在 try 里，而"直接打开 `/#/goods/create` 或在本页刷新后"
+    // 并不存在上一页，`Get.back()` 于是静默地什么都没发生——页面毫无变化，用户以为
+    // 发布失败并反复点击，而后端每次都是成功的，结果一件商品被发成了 9 件。
+    // 因此这里显式判断：有上一页就返回并把结果回传给列表页，没有就跳到"我的发布"，
+    // 让用户立刻看到刚发布的商品（同时把"成功"这件事变得可见）。
+    _published = true; // 已成功：此后不再接受提交，从客户端杜绝重复发布
+    if (!mounted) return;
+    if (Navigator.of(context).canPop()) {
+      Get.back(result: true);
+    } else {
+      Get.offNamed(AppRoutes.goodsMy);
     }
   }
 
@@ -570,7 +592,7 @@ class _CreateGoodsPageState extends State<CreateGoodsPage> {
                 width: double.infinity,
                 height: 48,
                 child: ElevatedButton.icon(
-                  onPressed: (_isSubmitting || _isLoadingDetail) ? null : _submitGoods,
+                  onPressed: (_isSubmitting || _isLoadingDetail || _published) ? null : _submitGoods,
                   icon: (_isSubmitting || _isLoadingDetail)
                       ? const SizedBox(
                           width: 20,
