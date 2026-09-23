@@ -296,8 +296,10 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
         CampusSchool school = requireSchool(dto.getSchoolId());
 
         String studentNumber = dto.getStudentNumber().trim();
-        String realName = dto.getRealName().trim();
-        String evidenceUrl = dto.getEvidenceUrl().trim();
+        // 姓名与照片是**可选**的加分材料：空值统一归一化为 null，
+        // 既避免把空字符串写进库，也避免审核页把它展示成"看起来填过但内容缺失"
+        String realName = trimToNull(dto.getRealName());
+        String evidenceUrl = trimToNull(dto.getEvidenceUrl());
 
         // 1. 提交限流：这条通道没有发信成本，但**审核是人工的**，不限流就会有人把审核队列刷满
         enforceLimit(
@@ -419,6 +421,15 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
             throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "选择的高校不存在或已暂停服务");
         }
         return school;
+    }
+
+    /** 空白字符串归一化为 null（可选字段的统一处理） */
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     // =========================================================================

@@ -419,7 +419,7 @@ class ProfilePage extends StatelessWidget {
                           ListTile(
                             leading: const Icon(Icons.fact_check_outlined, color: Colors.purple),
                             title: const Text('认证审核'),
-                            subtitle: const Text('审核学生提交的学生证材料（无邮箱通道）'),
+                            subtitle: const Text('审核学生提交的学号认证（无邮箱通道）'),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () => Get.toNamed(AppRoutes.adminVerifyReview),
                           ),

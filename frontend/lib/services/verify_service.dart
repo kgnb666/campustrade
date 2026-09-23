@@ -38,11 +38,14 @@ class VerifyService {
   }
 
   /// 提交「无邮箱通道」认证材料，返回服务端提示文案（"材料已提交，等待审核"）
+  ///
+  /// 只有 [schoolId] 与 [studentNumber] 是必填：姓名与照片是可选加分材料。
+  /// 这条通道面向"学校连邮箱都没有"的学生，多一个必填项就可能多挡掉一批人。
   Future<String> submitManualVerify({
     required String schoolId,
     required String studentNumber,
-    required String realName,
-    required String evidenceUrl,
+    String? realName,
+    String? evidenceUrl,
   }) async {
     try {
       final response = await _dio.post('/student/verify/manual', data: {

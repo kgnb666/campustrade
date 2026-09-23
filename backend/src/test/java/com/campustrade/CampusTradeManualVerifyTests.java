@@ -282,6 +282,39 @@ class CampusTradeManualVerifyTests {
                 .andExpect(jsonPath("$.data.records[0].verifyStatusDesc").value("待核销/待审核"));
     }
 
+    @Test
+    @DisplayName("9. 只填学校 + 学号即可提交：姓名与照片是可选加分材料（不是必填）")
+    void testSubmitWithStudentNumberOnly() throws Exception {
+        ManualVerifyRequest minimal = new ManualVerifyRequest();
+        minimal.setSchoolId(SCHOOL_ID);
+        minimal.setStudentNumber(STUDENT_NUMBER);
+        // 刻意不设置 realName / evidenceUrl
+
+        mockMvc.perform(post("/student/verify/manual")
+                        .header("Authorization", "Bearer " + applicantToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(minimal)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.message").value(StudentVerifyService.MANUAL_SUBMIT_MESSAGE));
+
+        StudentVerify record = applicantRecord();
+        assertNotNull(record, "只填学号也必须能落库");
+        assertEquals(StudentVerifyStatus.PENDING.getCode(), record.getVerifyStatus());
+        assertEquals(VerifyMethod.MANUAL.getCode(), record.getVerifyMethod());
+        assertNull(record.getRealName(), "未填姓名时应落 null，而不是空字符串");
+        assertNull(record.getEvidenceUrl(), "未上传照片时应落 null");
+        assertNull(record.getSchoolEmail(), "人工通道不写校园邮箱");
+
+        // 管理员仍能正常审核通过
+        mockMvc.perform(put("/admin/verifies/" + record.getId() + "/review")
+                        .header("Authorization", "Bearer " + adminToken())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(reviewBody("APPROVE", "已核对学号")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.verifyStatus").value("SUCCESS"));
+    }
+
     // =========================================================================
     // 辅助
     // =========================================================================

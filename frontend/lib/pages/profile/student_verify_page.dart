@@ -380,7 +380,7 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
                   OutlinedButton.icon(
                     onPressed: () => Get.toNamed(AppRoutes.studentVerifyManual),
                     icon: const Icon(Icons.badge_outlined, size: 18),
-                    label: const Text('没有校园邮箱？改用学生证认证'),
+                    label: const Text('没有校园邮箱？用学号认证（人工审核）'),
                     style: OutlinedButton.styleFrom(
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),

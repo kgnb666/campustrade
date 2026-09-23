@@ -16,10 +16,10 @@ class VerifyStatusModel {
   final String? schoolName;
   final String? studentNumber;
 
-  /// 人工通道填写的真实姓名
+  /// 人工通道填写的真实姓名（可选）
   final String? realName;
 
-  /// 人工通道提交的学生证/校园卡照片
+  /// 人工通道提交的学生证/校园卡照片（可选）
   final String? evidenceUrl;
 
   /// 管理员审核意见（驳回原因）

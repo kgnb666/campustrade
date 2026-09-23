@@ -12,10 +12,13 @@ import '../../services/verify_service.dart';
 import '../../utils/api_error.dart';
 import '../../utils/ui_feedback.dart';
 
-/// 「无邮箱通道」校园认证页：学生证/校园卡照片 + 管理员人工审核。
+/// 「无邮箱通道」校园认证页：填学号提交 + 管理员审核。
 ///
 /// 为什么需要它：一部分高校不提供学生邮箱，邮箱验证码通道对其学生永远走不通，
 /// 而校园认证是"发布商品"的硬前置 —— 走不通就等于用不了平台。
+///
+/// 门槛刻意压低：**只有学校与学号必填**，姓名与学生证照片都是可选加分项。
+/// 这条通道面向的正是"学校连邮箱都没有"的场景，多一个必填项就可能多挡掉一批人。
 ///
 /// 页面形态由服务端返回的认证状态决定：
 ///   未认证 → 直接展示表单；
@@ -104,23 +107,21 @@ class _StudentVerifyManualPageState extends State<StudentVerifyManualPage> {
       safeSnackbar('提示', '请选择所属高校', snackPosition: SnackPosition.BOTTOM);
       return;
     }
-    if (_evidenceBytes == null) {
-      safeSnackbar('提示', '请上传学生证或校园卡照片', snackPosition: SnackPosition.BOTTOM);
-      return;
-    }
-
     setState(() => _submitting = true);
     try {
-      // 先把照片传到对象存储，再把地址随申请一起提交：材料与申请同一次请求落库，
-      // 不会出现"申请已提交但照片还在路上"的半成品状态。
-      final evidenceUrl = await _verifyService.uploadEvidence(
-        _evidenceBytes!,
-        _evidenceName ?? 'student-card.png',
-      );
+      // 照片是可选的：选了才上传。上传与提交分开两步，因此上传失败时会在下面被提示，
+      // 不会留下"申请已提交但材料丢了"的半成品状态。
+      String? evidenceUrl;
+      if (_evidenceBytes != null) {
+        evidenceUrl = await _verifyService.uploadEvidence(
+          _evidenceBytes!,
+          _evidenceName ?? 'student-card.png',
+        );
+      }
       final message = await _verifyService.submitManualVerify(
         schoolId: _selectedSchool!.id,
         studentNumber: _studentNumberController.text.trim(),
-        realName: _realNameController.text.trim(),
+        realName: _realNameController.text.trim().isEmpty ? null : _realNameController.text.trim(),
         evidenceUrl: evidenceUrl,
       );
       if (!mounted) return;
@@ -144,7 +145,7 @@ class _StudentVerifyManualPageState extends State<StudentVerifyManualPage> {
     final status = _status;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('学生证认证'), centerTitle: true),
+      appBar: AppBar(title: const Text('学号认证（人工审核）'), centerTitle: true),
       body: _loadingStatus
           ? const Center(child: CircularProgressIndicator())
           : Center(
@@ -158,13 +159,13 @@ class _StudentVerifyManualPageState extends State<StudentVerifyManualPage> {
                       Icon(Icons.badge_outlined, size: 56, color: theme.colorScheme.primary),
                       const SizedBox(height: 12),
                       Text(
-                        '没有校园邮箱？用学生证认证',
+                        '没有校园邮箱？用学号认证',
                         textAlign: TextAlign.center,
                         style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '上传学生证或校园卡照片，管理员审核通过后即可点亮认证标识',
+                        '填学号即可提交，管理员审核通过后点亮认证标识；姓名与学生证照片可选（填了能加快审核）',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.grey[600], fontSize: 13),
                       ),
@@ -292,12 +293,11 @@ class _StudentVerifyManualPageState extends State<StudentVerifyManualPage> {
           TextFormField(
             controller: _realNameController,
             decoration: const InputDecoration(
-              labelText: '真实姓名',
-              hintText: '须与学生证上的姓名一致',
+              labelText: '真实姓名（可选）',
+              hintText: '填了便于管理员核对，不填也可以提交',
               prefixIcon: Icon(Icons.person_outline),
               border: OutlineInputBorder(),
             ),
-            validator: (v) => v == null || v.trim().isEmpty ? '姓名不能为空' : null,
           ),
           const SizedBox(height: 16),
           _buildEvidencePicker(),
@@ -338,7 +338,7 @@ class _StudentVerifyManualPageState extends State<StudentVerifyManualPage> {
                     children: [
                       const Icon(Icons.add_a_photo_outlined, size: 34, color: Colors.grey),
                       const SizedBox(height: 8),
-                      Text('点击上传学生证 / 校园卡照片',
+                      Text('点击上传学生证 / 校园卡照片（可选）',
                           style: TextStyle(color: Colors.grey[700], fontSize: 13)),
                       const SizedBox(height: 4),
                       Text('照片仅用于身份核验，审核完成后可申请删除',

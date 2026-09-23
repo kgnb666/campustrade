@@ -9,15 +9,18 @@
 
 ---
 
-## 2026-09-23 — 校园认证「无邮箱通道」：学生证照片 + 管理员人工审核
+## 2026-09-23 — 校园认证「无邮箱通道」：学号 + 管理员人工审核（姓名/照片可选）
 
 **为什么加**：V1 起的校园认证只有一条通道（学号 + 校园邮箱 + 邮件验证码），而一部分高校**根本不提供学生邮箱**。
 校园认证是"发布商品"的硬前置，那条链路对这批学生等于不存在——他们用不了平台。演示模式（见下一条）只解决
 "演示"，解决不了"学生真的没有邮箱"。
 
-**做法**：新增**第二条认证通道**：学生填学校 + 学号 + 真实姓名并上传学生证/校园卡照片，管理员在审核队列里
+**做法**：新增**第二条认证通道**：学生填学校 + 学号即可提交（姓名与学生证照片可选），管理员在审核队列里
 通过或驳回。两条通道写同一张 `student_verify` 表，用 `verify_method` 区分；**认证结果语义完全相同**
 （都是 `verify_status = 'SUCCESS'`，都点亮同一个认证标识），下游（发布商品闸门、卖家"已认证"标识）不区分通道。
+
+**门槛取值**：必填只有学校与学号。这条通道面向的正是"学校连邮箱都没有"的学生，多一个必填项就可能多挡掉
+一批人（没有学生证照片、不愿上传证件）；姓名与照片保留为可选加分项，需要更严格核验时再收紧。
 
 **改动清单**
 
@@ -26,14 +29,14 @@
 | `V13__add_manual_verify_channel.sql`（新增） | `school_email` 允许为空；状态域加入 `REJECTED`；新增 `verify_method` / `real_name` / `evidence_url` / `review_note` / `reviewer_id` / `review_time`；新增 `(school_id, student_number)` 的 SUCCESS 部分唯一索引（学号不得一码多绑，与 V12 邮箱唯一索引对等）；发现历史冲突时跳过建索引并打印明细，不删改数据 |
 | `enums/StudentVerifyStatus` | 新增 `REJECTED`；`PENDING` 描述改为"待核销/待审核"（这个状态在两条通道上的等待对象不同）；类注释同步"SUCCESS 可由两条受控路径写入" |
 | `enums/VerifyMethod`（新增） | `EMAIL` / `MANUAL`，与数据库 CHECK 取值域一一对应 |
-| `dto/ManualVerifyRequest`、`vo/StudentVerifyStatusVO`、`vo/AdminVerifyReviewVO`（新增） | 学生提交、学生状态查询、管理员队列三处契约 |
+| `dto/ManualVerifyRequest`、`vo/StudentVerifyStatusVO`、`vo/AdminVerifyReviewVO`（新增） | 学生提交、学生状态查询、管理员队列三处契约；`ManualVerifyRequest` 必填仅 `schoolId` + `studentNumber`，姓名/照片可选且空值归一化为 null |
 | `service/StudentVerifyService(.Impl)` | 新增 `submitManualVerify`（含每小时 5 次提交限流、学号占用校验、重新提交清空上一轮结论）与 `getMyVerifyStatus` |
 | `service/AdminVerifyService(.Impl)`（新增） | 审核队列（默认待审核、按提交时间正序）与处置（`APPROVE` / `REJECT`，驳回必填原因）；条件更新 + 受影响行数保证"谁先处置谁生效"；每次处置写 `admin_audit_log` |
 | `controller/StudentVerifyController` | 新增 `POST /student/verify/manual`、`GET /student/verify/status` |
 | `controller/AdminVerifyController`（新增） | `GET /admin/verifies`、`PUT /admin/verifies/{id}/review`，类级 `@PreAuthorize("hasRole('ADMIN')")` |
 | `enums/AdminOperationType` | 新增 `PASS_STUDENT_VERIFY` / `REJECT_STUDENT_VERIFY` |
 | `frontend/models/verify_models.dart`、`services/verify_service.dart`（新增） | 认证状态、材料上传与提交、管理员队列与处置 |
-| `frontend/pages/profile/student_verify_manual_page.dart`（新增） | 未认证 → 表单；待审核 → 只显示"等待审核"；已驳回 → 显示原因并可重提；已认证 → 显示结果 |
+| `frontend/pages/profile/student_verify_manual_page.dart`（新增） | 未认证 → 表单（只校验学校与学号）；待审核 → 只显示"等待审核"；已驳回 → 显示原因并可重提；已认证 → 显示结果 |
 | `frontend/pages/admin/verify_review_page.dart`（新增） | 平台第一个管理端页面：待审核列表 + 材料大图 + 通过/驳回（驳回必填原因） |
 | `frontend/pages/profile/student_verify_page.dart`、`profile_page.dart`、`routes/*` | 认证页底部新增"没有校园邮箱？改用学生证认证"入口；个人中心对管理员显示"认证审核" |
 | `README.md`、`docs/README.md` | 新增「3.2 学校根本不发学生邮箱怎么办」；核心功能条目改为"两条通道" |
@@ -44,8 +47,8 @@
 | :--- | :--- |
 | 后端编译 / 测试编译 | 193 个主源文件 + 32 个测试源文件编译通过 |
 | 前端静态检查 | `flutter analyze` 0 issue |
-| 前端测试 | 204 项全部通过（新增 `manual_verify_test.dart` 4 项：待审核不显示表单、驳回显示原因且可重提、材料不齐当场拦下、管理端列表与处置入口） |
-| 线上端到端（部署机真实接口） | 注册 → 上传照片 → 提交材料（PENDING/MANUAL）→ 未认证发布被拒 400 → 管理员队列可见 → 驳回不写原因 400 → 驳回（REJECTED，学生看到原因）→ 重提（PENDING，原因清空）→ 通过（SUCCESS）→ 发布成功 → 审计流水 `PASS_STUDENT_VERIFY` |
+| 前端测试 | 205 项全部通过（新增 `manual_verify_test.dart` 5 项：待审核不显示表单、驳回显示原因且可重提、材料不齐当场拦下、**只填学校+学号即可提交**、管理端列表与处置入口） |
+| 线上端到端（部署机真实接口） | 注册 → 提交材料（PENDING/MANUAL）→ 未认证发布被拒 400 → 管理员队列可见 → 驳回不写原因 400 → 驳回（REJECTED，学生看到原因）→ 重提（PENDING，原因清空）→ 通过（SUCCESS）→ 发布成功 → 审计流水 `PASS_STUDENT_VERIFY` |
 | 迁移 | 线上执行 V13 成功（`flyway_schema_history` 到 v13），约束与两条唯一索引均已建立 |
 
 > 本机后端测试套件仍受"JVM 创建 loopback 管道失败"的环境问题影响无法运行（与代码无关，见

@@ -4,17 +4,21 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:frontend/api/dio_client.dart';
 import 'package:frontend/controllers/auth_controller.dart';
+import 'package:frontend/models/user_model.dart';
 import 'package:frontend/routes/app_pages.dart';
 import 'package:frontend/routes/app_routes.dart';
 import 'package:frontend/services/storage_service.dart';
 import 'package:frontend/utils/ui_feedback.dart';
 import 'package:get/get.dart' hide Response;
 
-/// 「无邮箱通道」（学生证 + 管理员审核）的前端回归测试。
+/// 「无邮箱通道」（学号 + 管理员审核）的前端回归测试。
 ///
 /// 这条通道的目标用户**没有**校园邮箱，所以"材料提交不了""审核状态看不到""被驳回后不知道改什么"
 /// 这三件事在他们身上没有任何替代路径 —— 直接等于用不了平台。本文件把页面的四种状态与
 /// 管理端审核入口钉住，避免以后改动把这条通道悄悄弄坏。
+///
+/// 另外钉住一条产品决策：**只有学校与学号必填**，姓名与学生证照片是可选加分项。
+/// 这条通道面向的是"学校连邮箱都没有"的场景，多一个必填项就可能多挡掉一批人。
 void main() {
   Interceptor? mockInterceptor;
   late List<({String title, String message, Duration duration})> toasts;
@@ -159,6 +163,26 @@ void main() {
     // 关键是：没有发出任何请求，也没有"提交成功"这类误导性反馈。
     expect(find.text('请选择高校'), findsOneWidget, reason: '未选学校必须当场提示');
     expect(toasts, isEmpty, reason: '材料不齐不得发出请求');
+  });
+
+  testWidgets('只填学校+学号即可提交：姓名与照片都是可选', (tester) async {
+    installMockApi(status: {'verifyStatus': null, 'verified': false});
+    await openPage(tester, AppRoutes.studentVerifyManual);
+
+    await tester.tap(find.byType(DropdownButtonFormField<SchoolModel>).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('清华大学 (10001)').last);
+    await tester.pumpAndSettle();
+
+    // 只填学号；姓名与照片留空
+    await tester.enterText(find.byType(TextFormField).first, '2024010203');
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('提交审核'));
+    await tester.pumpAndSettle();
+
+    expect(toasts.map((t) => t.title), contains('已提交'),
+        reason: '只有学号也必须能提交：多一个必填项就可能多挡掉一批没有邮箱的学生');
+    expect(find.textContaining('请上传'), findsNothing, reason: '照片不再是必填项');
   });
 
   testWidgets('管理端：列出待审核材料，并提供通过 / 驳回入口', (tester) async {
