@@ -6,27 +6,43 @@ import java.util.Locale;
  * 学生认证状态枚举 —— {@code student_verify.verify_status} 取值的唯一真相源。
  *
  * <h2>取值与数据库约束一一对应</h2>
- * <p>取值集合与 V10 迁移中 {@code student_verify.verify_status} 的 CHECK 约束
- * {@code chk_student_verify_status_domain}（{@code CHECK (verify_status IN ('PENDING','SUCCESS'))}）
- * 完全一致；V12 的部分唯一索引也建立在 {@code verify_status = 'SUCCESS'} 上。</p>
+ * <p>取值集合与 {@code student_verify.verify_status} 的 CHECK 约束
+ * {@code chk_student_verify_status_domain} 完全一致（V10 建立时只有 {@code PENDING/SUCCESS}，
+ * V13 因"人工审核通道"加入了 {@code REJECTED}）；V12 的邮箱唯一索引与 V13 的学号唯一索引
+ * 都建立在 {@code verify_status = 'SUCCESS'} 上。</p>
  *
- * <p>此前这两个取值在四处各写了一遍字面量（实体默认值、服务层两个常量、以及查询条件），
- * 而"SUCCESS 只能由验证码核销成功这一条路径写入"是一条安全边界——
+ * <p>此前这些取值在四处各写了一遍字面量（实体默认值、服务层常量、查询条件），
+ * 而"SUCCESS 只能由**受控的核销/审核路径**写入"是一条安全边界——
  * 边界散落在字面量里就无法用类型系统或一次改名来保证一致。本枚举把它收敛到一处：
  * 落库与接口中的取值都是 {@link #getCode()}，而 {@code getCode()} 就是枚举常量名。</p>
  *
- * <h2>为什么没有 FAILED</h2>
- * <p>V10 的 CHECK 约束只允许 {@code PENDING} 与 {@code SUCCESS}：当前没有"认证失败"这个落库状态——
- * 验证码错误/过期时申请行仍停留在 {@code PENDING}，用户可重新发起。把 {@code FAILED} 写进枚举
- * 会让"枚举取值 == 数据库取值域"这条不变量失真，因此不收录。</p>
+ * <h2>为什么是 REJECTED 而不是 FAILED</h2>
+ * <p>验证码错误/过期不属于落库状态：那种情况下申请行仍停留在 {@code PENDING}，用户可以重新发起
+ * （见 {@link #PENDING}）。而人工审核通道里，"管理员驳回了这份材料"是一个**终态事实**，
+ * 用户必须能区分"还在排队"与"已被驳回、需要改材料重提"，所以要有一个显式状态。
+ * 它叫 {@code REJECTED}（针对"审核结论"）而不是 {@code FAILED}（会被误读成"认证尝试失败"）。</p>
  */
 public enum StudentVerifyStatus {
 
-    /** 待核销：申请已提交（或重发验证码后仍待核销），是核销路径唯一允许的起点 */
-    PENDING("待核销"),
+    /**
+     * 待核销 / 待审核：申请已提交，尚未产生认证结论。
+     *
+     * <p>描述里同时写出两种说法，是因为这个状态在两条通道上的"等待对象"不同：
+     * 邮箱通道等学生自己输入验证码核销，人工通道等管理员审核。它是对外展示文案
+     * （状态查询与审核队列都用它），因此不能只写其中一条通道的说法。</p>
+     */
+    PENDING("待核销/待审核"),
 
-    /** 认证通过：只能由"验证码核销成功"写入（V12 的部分唯一索引只覆盖该状态） */
-    SUCCESS("认证通过");
+    /**
+     * 认证通过：只能由两条受控路径写入 —— 邮箱验证码核销成功，或管理员审核通过。
+     *
+     * <p>两条通道的差异只记录在 {@code verify_method} 上；认证状态的语义完全一致，
+     * 因此下游（发布商品闸门、卖家"已认证"标识）只认这一个状态。</p>
+     */
+    SUCCESS("认证通过"),
+
+    /** 人工审核驳回：只由管理员审核写入，附带驳回原因（{@code review_note}），学生可修改材料重新提交 */
+    REJECTED("审核未通过");
 
     private final String description;
 

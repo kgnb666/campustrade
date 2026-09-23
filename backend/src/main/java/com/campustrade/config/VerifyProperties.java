@@ -58,6 +58,15 @@ public class VerifyProperties {
      */
     private List<String> demoEmails = new ArrayList<>();
 
+    /**
+     * 「无邮箱通道」（学生证人工审核）每小时的提交上限（环境变量
+     * {@code VERIFY_MANUAL_SUBMIT_LIMIT_PER_HOUR}），默认 5。
+     *
+     * <p>这条通道没有发信成本，但有**管理员的时间成本**：不限流时一个账号可以反复提交，
+     * 把审核队列刷满。限流与邮箱通道的发送配额分开计数，两条通道互不挤占额度。</p>
+     */
+    private int manualSubmitLimitPerHour = 5;
+
     /** SMTP 服务器主机（环境变量 MAIL_HOST，生产必需） */
     private String mailHost;
 

@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.campustrade.enums.StudentVerifyStatus;
+import com.campustrade.enums.VerifyMethod;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -48,6 +49,34 @@ public class StudentVerify implements Serializable {
     @Builder.Default
     @TableField("verify_status")
     private String verifyStatus = StudentVerifyStatus.PENDING.getCode();
+
+    /**
+     * 认证通道：EMAIL（校园邮箱验证码）/ MANUAL（学生证人工审核）。
+     * 取值来自 {@link VerifyMethod}，数据库 CHECK 只允许这两个值。
+     */
+    @Builder.Default
+    @TableField("verify_method")
+    private String verifyMethod = VerifyMethod.EMAIL.getCode();
+
+    /** 人工通道填写的真实姓名（邮箱通道为空） */
+    @TableField("real_name")
+    private String realName;
+
+    /** 人工通道的证明材料地址（学生证/校园卡照片，复用 /file/upload 的返回值） */
+    @TableField("evidence_url")
+    private String evidenceUrl;
+
+    /** 管理员审核意见：驳回时必填（说明原因），通过时可选 */
+    @TableField("review_note")
+    private String reviewNote;
+
+    /** 审核人（管理员）用户 ID */
+    @TableField("reviewer_id")
+    private Long reviewerId;
+
+    /** 审核时间 */
+    @TableField("review_time")
+    private LocalDateTime reviewTime;
 
     @TableField("verify_time")
     private LocalDateTime verifyTime;

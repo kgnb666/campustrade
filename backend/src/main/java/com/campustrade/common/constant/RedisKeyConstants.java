@@ -126,6 +126,14 @@ public final class RedisKeyConstants {
     public static final String STUDENT_VERIFY_SEND_USER_PREFIX = "student:verify:send:user:";
 
     /**
+     * 「无邮箱通道」认证材料的提交限流键（按用户计）。
+     *
+     * <p>人工审核通道没有邮件成本，但有**管理员的时间成本**：不限流时一个账号可以反复
+     * 提交/撤回材料，把审核队列刷满。它与邮箱通道的发送限流分开计数，避免两条通道互相挤占额度。</p>
+     */
+    public static final String STUDENT_VERIFY_MANUAL_USER_PREFIX = "student:verify:manual:user:";
+
+    /**
      * AI 商品助手每日调用配额前缀 (String 类型)
      * 格式: ai:quota:day:{userId}:{yyyyMMdd}
      * 值: 当日已调用次数 (INCR)
@@ -239,6 +247,10 @@ public final class RedisKeyConstants {
      */
     public static String studentVerifyFailKey(Long userId, String schoolEmail) {
         return STUDENT_VERIFY_FAIL_PREFIX + userId + ":" + schoolEmail;
+    }
+
+    public static String studentVerifyManualUserKey(Long userId) {
+        return STUDENT_VERIFY_MANUAL_USER_PREFIX + userId;
     }
 
     /**

@@ -7,16 +7,19 @@ import com.campustrade.common.constant.RedisKeyConstants;
 import com.campustrade.config.VerifyProperties;
 import com.campustrade.dto.StudentVerifyCodeDTO;
 import com.campustrade.dto.StudentVerifyDTO;
+import com.campustrade.dto.ManualVerifyRequest;
 import com.campustrade.entity.CampusSchool;
 import com.campustrade.entity.StudentVerify;
 import com.campustrade.entity.User;
 import com.campustrade.enums.StudentVerifyStatus;
+import com.campustrade.enums.VerifyMethod;
 import com.campustrade.exception.BusinessException;
 import com.campustrade.mapper.CampusSchoolMapper;
 import com.campustrade.mapper.StudentVerifyMapper;
 import com.campustrade.mapper.UserMapper;
 import com.campustrade.service.StudentVerifyService;
 import com.campustrade.service.mail.VerifyCodeMailSender;
+import com.campustrade.vo.StudentVerifyStatusVO;
 import com.campustrade.vo.VerifySubmitVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -280,6 +283,142 @@ public class StudentVerifyServiceImpl implements StudentVerifyService {
         stringRedisTemplate.delete(failKey);
         log.info("用户校园认证成功: userId={}, username={}, schoolEmail={}",
                 user.getId(), username, VerifyCodeMailSender.maskEmail(email));
+    }
+
+    // =========================================================================
+    // 无邮箱通道（学生证 + 管理员人工审核）
+    // =========================================================================
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void submitManualVerify(String username, ManualVerifyRequest dto) {
+        User user = requireUser(username);
+        CampusSchool school = requireSchool(dto.getSchoolId());
+
+        String studentNumber = dto.getStudentNumber().trim();
+        String realName = dto.getRealName().trim();
+        String evidenceUrl = dto.getEvidenceUrl().trim();
+
+        // 1. 提交限流：这条通道没有发信成本，但**审核是人工的**，不限流就会有人把审核队列刷满
+        enforceLimit(
+                "manual-submit", "userId=" + user.getId(),
+                RedisKeyConstants.studentVerifyManualUserKey(user.getId()),
+                1, TimeUnit.HOURS, verifyProperties.getManualSubmitLimitPerHour(),
+                "认证材料提交过于频繁，请稍后再试"
+        );
+
+        // 2. 已认证（无论哪条通道）不再受理：重复提交只会给审核队列添乱
+        StudentVerify latest = latestVerify(user.getId());
+        if (latest != null && StudentVerifyStatus.SUCCESS.matches(latest.getVerifyStatus())) {
+            throw new BusinessException(409, "你已完成校园身份认证，无需重复提交");
+        }
+
+        // 3. 学号占用校验：邮箱通道靠 V12 的邮箱唯一索引防"一人多号"，
+        //    人工通道没有邮箱，改由"学校 + 学号"承担同一职责（V13 的部分唯一索引兜底并发）
+        Long occupiedByOthers = studentVerifyMapper.selectCount(
+                new LambdaQueryWrapper<StudentVerify>()
+                        .eq(StudentVerify::getSchoolId, school.getId())
+                        .eq(StudentVerify::getStudentNumber, studentNumber)
+                        .eq(StudentVerify::getVerifyStatus, STATUS_SUCCESS)
+                        .ne(StudentVerify::getUserId, user.getId())
+        );
+        if (occupiedByOthers != null && occupiedByOthers > 0) {
+            log.warn("人工认证通道：学号已被其他账号认证: schoolId={}, studentNumber={}, userId={}",
+                    school.getId(), studentNumber, user.getId());
+            throw new BusinessException(409,
+                    "该学号已被其他账号完成认证，一个学号只能绑定一个账号；如有疑问请联系平台管理员");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        if (latest == null) {
+            studentVerifyMapper.insert(StudentVerify.builder()
+                    .userId(user.getId())
+                    .schoolId(school.getId())
+                    .studentNumber(studentNumber)
+                    .realName(realName)
+                    .evidenceUrl(evidenceUrl)
+                    .verifyMethod(VerifyMethod.MANUAL.getCode())
+                    .verifyStatus(STATUS_PENDING)
+                    .createdTime(now)
+                    .build());
+        } else {
+            // 重新提交 = 覆盖上一轮材料并回到待审核：
+            //   - 清空上一轮的审核结论，否则"待审核"还挂着旧的驳回理由，学生看到的状态自相矛盾；
+            //   - 清空 school_email：切到人工通道后邮箱不再是证据，留着会让两条通道的字段互相污染。
+            int updated = studentVerifyMapper.update(null, new LambdaUpdateWrapper<StudentVerify>()
+                    .set(StudentVerify::getSchoolId, school.getId())
+                    .set(StudentVerify::getStudentNumber, studentNumber)
+                    .set(StudentVerify::getRealName, realName)
+                    .set(StudentVerify::getEvidenceUrl, evidenceUrl)
+                    .set(StudentVerify::getVerifyMethod, VerifyMethod.MANUAL.getCode())
+                    .set(StudentVerify::getVerifyStatus, STATUS_PENDING)
+                    .set(StudentVerify::getSchoolEmail, null)
+                    .set(StudentVerify::getReviewNote, null)
+                    .set(StudentVerify::getReviewerId, null)
+                    .set(StudentVerify::getReviewTime, null)
+                    .eq(StudentVerify::getId, latest.getId())
+                    .ne(StudentVerify::getVerifyStatus, STATUS_SUCCESS));
+            if (updated != 1) {
+                throw new BusinessException(409, "认证状态已变更，请刷新后重新提交");
+            }
+        }
+
+        // 日志只记录账号与学校，不记录姓名与材料地址（后者指向学生证照片，属个人信息）
+        log.info("校园认证人工通道材料已提交: userId={}, username={}, schoolId={}",
+                user.getId(), username, school.getId());
+    }
+
+    @Override
+    public StudentVerifyStatusVO getMyVerifyStatus(String username) {
+        User user = requireUser(username);
+        StudentVerify latest = latestVerify(user.getId());
+        if (latest == null) {
+            return StudentVerifyStatusVO.builder().verified(false).build();
+        }
+        CampusSchool school = latest.getSchoolId() == null
+                ? null : campusSchoolMapper.selectById(latest.getSchoolId());
+        StudentVerifyStatus status = StudentVerifyStatus.fromCode(latest.getVerifyStatus());
+        return StudentVerifyStatusVO.builder()
+                .verifyStatus(latest.getVerifyStatus())
+                .verifyMethod(latest.getVerifyMethod())
+                .verifyStatusDesc(status != null ? status.getDescription() : latest.getVerifyStatus())
+                .schoolId(latest.getSchoolId())
+                .schoolName(school != null ? school.getSchoolName() : null)
+                .studentNumber(latest.getStudentNumber())
+                .realName(latest.getRealName())
+                .evidenceUrl(latest.getEvidenceUrl())
+                .reviewNote(latest.getReviewNote())
+                .submittedTime(latest.getCreatedTime())
+                .reviewTime(latest.getReviewTime())
+                .verifyTime(latest.getVerifyTime())
+                .verified(StudentVerifyStatus.SUCCESS.matches(latest.getVerifyStatus()))
+                .build();
+    }
+
+    /** 取当前用户最新一条认证记录：两条通道共用同一行，"最新一条"即当前状态。 */
+    private StudentVerify latestVerify(Long userId) {
+        return studentVerifyMapper.selectOne(
+                new LambdaQueryWrapper<StudentVerify>()
+                        .eq(StudentVerify::getUserId, userId)
+                        .orderByDesc(StudentVerify::getCreatedTime)
+                        .last("LIMIT 1")
+        );
+    }
+
+    private User requireUser(String username) {
+        User user = userMapper.selectOne(new LambdaQueryWrapper<User>().eq(User::getUsername, username));
+        if (user == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND.getCode(), "用户不存在");
+        }
+        return user;
+    }
+
+    private CampusSchool requireSchool(Long schoolId) {
+        CampusSchool school = schoolId == null ? null : campusSchoolMapper.selectById(schoolId);
+        if (school == null || !"ACTIVE".equalsIgnoreCase(school.getStatus())) {
+            throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "选择的高校不存在或已暂停服务");
+        }
+        return school;
     }
 
     // =========================================================================

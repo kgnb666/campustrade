@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 import '../../controllers/auth_controller.dart';
 import '../../models/user_model.dart';
+import '../../routes/app_routes.dart';
 import '../../utils/ui_feedback.dart';
 
 /// 校园身份认证页面
@@ -371,6 +372,20 @@ class _StudentVerifyPageState extends State<StudentVerifyPage> {
                           : const Text('完成认证', style: TextStyle(fontSize: 16)),
                     );
                   }),
+
+                  const SizedBox(height: 12),
+
+                  // 「无邮箱通道」入口：部分高校不提供学生邮箱，邮箱验证码这条路对其学生走不通。
+                  // 放在最后而不是顶部，是为了不打扰主通道——绝大多数学生按邮箱流程走即可。
+                  OutlinedButton.icon(
+                    onPressed: () => Get.toNamed(AppRoutes.studentVerifyManual),
+                    icon: const Icon(Icons.badge_outlined, size: 18),
+                    label: const Text('没有校园邮箱？改用学生证认证'),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                    ),
+                  ),
                 ],
               ),
             ),

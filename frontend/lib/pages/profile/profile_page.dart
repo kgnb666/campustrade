@@ -412,6 +412,18 @@ class ProfilePage extends StatelessWidget {
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () => Get.toNamed(AppRoutes.goodsCreate),
                         ),
+                        // 管理端入口：只在管理员账号下出现。前端不出现是"不打扰普通用户"，
+                        // 真正的权限边界在后端（/admin/** 由 hasRole('ADMIN') 拦截）。
+                        if (user.role.toUpperCase() == 'ADMIN') ...[
+                          const Divider(height: 1),
+                          ListTile(
+                            leading: const Icon(Icons.fact_check_outlined, color: Colors.purple),
+                            title: const Text('认证审核'),
+                            subtitle: const Text('审核学生提交的学生证材料（无邮箱通道）'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => Get.toNamed(AppRoutes.adminVerifyReview),
+                          ),
+                        ],
                       ],
                     ),
                   ),

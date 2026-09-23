@@ -82,9 +82,8 @@ enum VerifyStatus {
 
   /// 认证被驳回。
   ///
-  /// 预留取值：后端 `student_verify.verify_status` 的 CHECK 约束当前只允许
-  /// PENDING / SUCCESS（驳回路径尚未实现），因此本成员目前不会被匹配到；
-  /// 保留它是为了让解析逻辑在后端开放该状态时无需改动调用方。
+  /// 由「无邮箱通道」（学生证 + 管理员人工审核）写入：管理员驳回后学生能看到原因并重新提交。
+  /// 邮箱通道不会产生该状态（邮箱通道的验证码错误/过期只是"待核销"的中间态，不落库）。
   rejected('REJECTED', '未通过');
 
   const VerifyStatus(this.code, this.label);

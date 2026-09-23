@@ -1,13 +1,16 @@
 package com.campustrade.controller;
 
 import com.campustrade.common.Result;
+import com.campustrade.dto.ManualVerifyRequest;
 import com.campustrade.dto.StudentVerifyCodeDTO;
 import com.campustrade.dto.StudentVerifyDTO;
 import com.campustrade.security.SecurityUtils;
 import com.campustrade.service.StudentVerifyService;
+import com.campustrade.vo.StudentVerifyStatusVO;
 import com.campustrade.vo.VerifySubmitVO;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -48,5 +51,27 @@ public class StudentVerifyController {
         String username = SecurityUtils.getCurrentUsername();
         studentVerifyService.verifyCode(username, dto);
         return Result.success(StudentVerifyService.VERIFY_SUCCESS_MESSAGE, null);
+    }
+
+    /**
+     * 提交「无邮箱通道」认证材料（学校 + 学号 + 姓名 + 学生证照片）。
+     *
+     * <p>服务"没有学生邮箱"的高校：材料进入管理员审核队列，审核通过后点亮与邮箱通道**相同的**认证标识。
+     * 提交成功不等于认证成功，因此提示文案与邮箱通道刻意不同（见 {@link StudentVerifyService#MANUAL_SUBMIT_MESSAGE}）。</p>
+     */
+    @PostMapping("/verify/manual")
+    public Result<Void> submitManualVerify(@Valid @RequestBody ManualVerifyRequest dto) {
+        String username = SecurityUtils.getCurrentUsername();
+        studentVerifyService.submitManualVerify(username, dto);
+        return Result.success(StudentVerifyService.MANUAL_SUBMIT_MESSAGE, null);
+    }
+
+    /**
+     * 查询本人当前的认证状态：认证页据此区分 未认证 / 待审核 / 已认证 / 已驳回（含驳回原因）。
+     */
+    @GetMapping("/verify/status")
+    public Result<StudentVerifyStatusVO> myVerifyStatus() {
+        String username = SecurityUtils.getCurrentUsername();
+        return Result.success(studentVerifyService.getMyVerifyStatus(username));
     }
 }

@@ -18,6 +18,8 @@ import '../pages/order/my_orders_page.dart';
 import '../pages/order/order_detail_page.dart';
 import '../pages/profile/profile_page.dart';
 import '../pages/profile/student_verify_page.dart';
+import '../pages/profile/student_verify_manual_page.dart';
+import '../pages/admin/verify_review_page.dart';
 import 'app_routes.dart';
 
 /// GetX 路由映射配置
@@ -72,6 +74,19 @@ class AppPages {
     GetPage(
       name: AppRoutes.studentVerify,
       page: () => const StudentVerifyPage(),
+      transition: Transition.rightToLeft,
+    ),
+    // 「无邮箱通道」：学生证照片 + 管理员人工审核（服务没有学生邮箱的高校）
+    GetPage(
+      name: AppRoutes.studentVerifyManual,
+      page: () => const StudentVerifyManualPage(),
+      transition: Transition.rightToLeft,
+    ),
+    // 管理端：认证审核队列（页面内不额外鉴权，接口由后端 hasRole('ADMIN') 拦截；
+    // 非管理员即便走到这里也只会看到 403 提示）
+    GetPage(
+      name: AppRoutes.adminVerifyReview,
+      page: () => const AdminVerifyReviewPage(),
       transition: Transition.rightToLeft,
     ),
     // Stage 2: 商品中心路由
