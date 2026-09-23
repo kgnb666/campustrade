@@ -72,7 +72,9 @@ void main() {
                 'submittedTime': '2026-09-23 10:00:00',
               }
             ],
-            'total': 1,
+            // 刻意写成**字符串**：后端把 long 序列化成字符串，分页 total 也一样。
+            // 这里用真实形态压测解析逻辑——曾因写成数字而让线上管理端整页报 TypeError。
+            'total': '1',
           }));
         }
         return handler.resolve(jsonOk(options, null));

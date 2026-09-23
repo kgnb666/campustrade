@@ -240,7 +240,7 @@ class _AdminVerifyReviewPageState extends State<AdminVerifyReviewPage> {
                   child: Text(item.displayName,
                       style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
                 ),
-                Text(item.submittedTime ?? '',
+                Text(item.displaySubmittedTime,
                     style: TextStyle(fontSize: 11.5, color: Colors.grey[600])),
               ],
             ),

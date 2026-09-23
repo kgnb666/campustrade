@@ -1,3 +1,5 @@
+import '../utils/json_cast.dart';
+
 /// 校园认证状态模型（对应后端 `GET /student/verify/status`）
 ///
 /// 认证页需要区分四种形态：未认证（从未提交）/ 待审核 / 已认证 / 已驳回（带原因）。
@@ -103,6 +105,15 @@ class AdminVerifyItem {
     return (username ?? '').trim();
   }
 
+  /// 提交时间的可读形式：后端下发的是 ISO 串（`2026-09-23T15:01:02.146241`），
+  /// 直接展示会带 `T` 和微秒，审核人看着累。这里只做最小整理（换成空格、截到秒）。
+  String get displaySubmittedTime {
+    final raw = (submittedTime ?? '').trim();
+    if (raw.isEmpty) return '-';
+    final normalized = raw.replaceFirst('T', ' ');
+    return normalized.length > 19 ? normalized.substring(0, 19) : normalized;
+  }
+
   factory AdminVerifyItem.fromJson(Map<String, dynamic> json) {
     return AdminVerifyItem(
       id: '${json['id']}',
@@ -133,7 +144,10 @@ class AdminVerifyPageModel {
       records: rawRecords
           .map((e) => AdminVerifyItem.fromJson(e as Map<String, dynamic>))
           .toList(),
-      total: (json['total'] as num?)?.toInt() ?? rawRecords.length,
+      // 必须走 asInt 容错解析：后端把 long 统一序列化成**字符串**（保住 19 位雪花 ID 的精度），
+      // 分页计数 total 同样是 long，因此线上拿到的是 "1" 而不是 1。
+      // 曾因此让管理端整页报 `type 'String' is not a subtype of type 'num?'` 而不可用。
+      total: asInt(json['total'], rawRecords.length),
     );
   }
 }
